@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+config.local.json
+firmware/firmware/secrets.h
+firmware/seeed_trmnl/secrets.h
+.pio/
+.tools/
+.build-env/
+*.bin
+*.elf
+*.map
+*.log
+build/
