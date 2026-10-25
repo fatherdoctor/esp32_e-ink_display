@@ -1,4 +1,4 @@
-"""Dependency-free calendar selection and wire protocol. Epochs are always UTC."""
+"""Calendar selection and secure BLE wire protocol. Epochs are always UTC."""
 from __future__ import annotations
 
 from dataclasses import dataclass

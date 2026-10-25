@@ -19,8 +19,8 @@ The Windows client and BLE wire protocol are shared by both variants.
 ## Architecture
 
 - `sync_calendar.py` scans every 10 minutes. If the display is absent, it waits
-  quietly without opening Outlook. When present, it authenticates the display, then reads the default calendar
-  and sends the next six current/future events.
+  quietly without opening Outlook. When present, it authenticates the display,
+  then reads the default calendar and sends the next six current/future events.
 - `calendar_core.py` handles event selection, privacy redaction, UTC/local-time
   metadata, bounded AES-GCM encrypted packets, device authentication and BLE framing.
 - The display proves possession of the per-device key using fresh client and
@@ -40,8 +40,8 @@ instructions for timing, reset and stale-calendar behavior.
 
 ## Local software tests
 
-Python 3.10+ is required. The synthetic dry run needs no extra packages. Tests require the encryption
-library, but no Outlook, credentials, or Bluetooth hardware:
+Python 3.10+ is required. The synthetic dry run needs no extra packages. Tests
+require the encryption library, but no Outlook, credentials, or Bluetooth hardware:
 
 ```powershell
 python -m pip install -r requirements-test.txt
@@ -70,7 +70,7 @@ The [Seeed guide](firmware/seeed_trmnl/README.md) has pin assignments, upload st
 power behavior and hardware acceptance checks.
 
 Only source is published. Compiled firmware contains its device's credentials;
-do not share the binary or generated credentials. The CI template uses disposable
+do not share the binary or generated credentials. CI uses disposable
 per-run credentials and does not upload firmware artifacts.
 
 ## Set up the Windows laptop without administrator rights
@@ -142,10 +142,9 @@ Unregister-ScheduledTask -TaskName 'Inkplate Calendar Sync'
 
 The Seeed firmware compiles with pinned dependencies in `platformio.ini`.
 Automated tests cover calendar selection, privacy, packet sizes/authentication,
-framing, provisioning, mocked Outlook extraction and BLE acknowledgements. The included
-[CI template](ci/github-checks.yml) runs the Python tests and a Seeed firmware build.
-It is not enabled yet: move it to `.github/workflows/checks.yml` using a GitHub
-credential with workflow permission, or through GitHub's web editor.
+framing, provisioning, mocked Outlook extraction and BLE acknowledgements. The
+[CI workflow](.github/workflows/checks.yml) runs Python tests on Windows and Linux
+and builds the Seeed firmware. Windows also exercises native regional date APIs.
 
 **Not yet verified on physical hardware:** panel compatibility/rendering,
 Windows pairing and bonded reconnect, internal clock drift, button wakes, and
