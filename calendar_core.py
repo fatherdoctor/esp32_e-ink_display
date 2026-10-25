@@ -13,7 +13,7 @@ import unicodedata
 SERVICE_UUID = "79dc1000-48c5-4b86-b403-184557b01e14"
 WRITE_UUID = "79dc1001-48c5-4b86-b403-184557b01e14"
 STATUS_UUID = "79dc1002-48c5-4b86-b403-184557b01e14"
-MAX_PACKET = 1024
+MAX_PACKET = 2048
 AUTH_DOMAIN = b"calendar-display-auth-v2"
 KEY_DOMAIN = b"calendar-display-encryption-v2"
 PAYLOAD_DOMAIN = b"calendar-display-payload-v2"
@@ -46,6 +46,14 @@ def local_bounds(now: datetime) -> tuple[int, int, int]:
     return int(start.timestamp()), int(end.timestamp()), int(morning.timestamp())
 
 
+def calendar_bounds(now: datetime) -> tuple[int, int, int, int]:
+    """Two independent local calendar days; never assume a day is 86400 seconds."""
+    start, end, morning = local_bounds(now)
+    date = now.astimezone().date() + timedelta(days=2)
+    tomorrow_end = int(datetime.combine(date, time()).astimezone().timestamp())
+    return start, end, tomorrow_end, morning
+
+
 def offsets(start: int, end: int) -> list[list[int]]:
     """Send offset transitions, including DST, without requiring tzdata on ESP32."""
     def offset(epoch: int) -> int:
@@ -73,21 +81,26 @@ def payload(events: list[Event], now: datetime | None = None,
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
     epoch = int(now.timestamp())
-    start, end, morning = local_bounds(now)
-    remaining = sorted((e for e in events if e.end > epoch and e.start < end
+    start, end, tomorrow_end, morning = calendar_bounds(now)
+    remaining = sorted((e for e in events if e.end > epoch and e.start < tomorrow_end
                         and e.end > start and e.end > e.start and e.status != 0),
                        key=lambda e: (e.start, e.end, e.subject))
-    # Never claim free after the seventh meeting was omitted, even if it overlaps.
-    horizon = min(end, max(epoch, remaining[6].start)) if len(remaining) > 6 else end
-    selected = remaining[:6]
+    today = [e for e in remaining if e.start < end]
+    tomorrow = [e for e in remaining if e.end > end]
+    horizon = min(end, max(epoch, today[6].start)) if len(today) > 6 else end
+    tomorrow_horizon = min(tomorrow_end, max(end, tomorrow[6].start)) if len(tomorrow) > 6 else tomorrow_end
+    # An overnight event belongs to both days but is transmitted only once.
+    selected = sorted(set(today[:6] + tomorrow[:6]), key=lambda e: (e.start, e.end, e.subject))
     rows = [[e.start, e.end,
              clean(e.subject, 32) if not e.private or show_private else "Private appointment",
              clean(e.location, 20) if not e.private or show_private else "",
              3 if e.status == 3 else 2] for e in selected]
     zone_start = min([start] + [e.start for e in selected])
-    return {"v": 2, "id": secrets.token_hex(4), "now": epoch, "day": start,
+    return {"v": 3, "kind": "calendar", "id": secrets.token_hex(4), "now": epoch, "day": start,
             "end": end, "morning": morning, "until": horizon,
-            "tz": offsets(zone_start, morning), "events": rows}
+            "tomorrow_end": tomorrow_end, "tomorrow_until": tomorrow_horizon,
+            "tz": offsets(zone_start, tomorrow_end),
+            "events": rows}
 
 
 def device_proof(key: bytes, challenge: bytes) -> bytes:

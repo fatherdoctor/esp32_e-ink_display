@@ -1,6 +1,7 @@
-# ESP32 E-paper Calendar
+# ESP32 E-paper Display
 
-An offline Outlook calendar sign that synchronizes over Bluetooth Low Energy,
+A reusable e-paper display with separate calendar and dashboard page renderers.
+The first live data source is Outlook: it synchronizes over Bluetooth Low Energy,
 then runs from its saved schedule while the laptop is away. No Microsoft Graph,
 Azure registration, TRMNL web service, cloud subscription, or Wi-Fi connection is
 required. The laptop uses classic Windows Outlook through local COM/MAPI.
@@ -12,15 +13,22 @@ required. The laptop uses classic Windows Outlook through local COM/MAPI.
 | Seeed TRMNL 7.5-inch (OG) DIY Kit, XIAO ESP32-S3 PLUS, 800x480 monochrome | [Seeed guide](firmware/seeed_trmnl/README.md) | Compiles; awaiting hardware validation |
 | Inkplate 6COLOR, 600x448 color | [Inkplate guide](docs/inkplate.md) | Initial source; not compiled or hardware-tested |
 
-The Seeed kit is the current development target. Its firmware uses large black
-and white status banners, a six-event agenda, and a last-sync/battery footer.
+The Seeed kit is the current development target. Its calendar page uses a date
+and availability sidebar, today/tomorrow timelines, and a last-sync/battery footer.
 The Windows client and BLE wire protocol are shared by both variants.
+
+![Calendar page design preview](previews/calendar-meeting.png)
+
+The [page rendering layer](firmware/seeed_trmnl/ui/README.md) also includes a
+separate read-only dashboard-card renderer for a future Home Assistant adapter.
+The [dashboard design preview](previews/dashboard.png) uses synthetic data;
+Home Assistant connectivity and dashboard message ingestion are not implemented.
 
 ## Architecture
 
 - `sync_calendar.py` scans every 10 minutes. If the display is absent, it waits
   quietly without opening Outlook. When present, it authenticates the display,
-  then reads the default calendar and sends the next six current/future events.
+  then reads today and tomorrow and sends up to six current/future events per day.
 - `calendar_core.py` handles event selection, privacy redaction, UTC/local-time
   metadata, bounded AES-GCM encrypted packets, device authentication and BLE framing.
 - The display proves possession of the per-device key using fresh client and
@@ -152,8 +160,10 @@ actual sleep current/battery life. Full refreshes are used initially. Timing is
 subject to clock drift, boot time and panel refresh; visible changes are not
 promised to be instantaneous. A power loss can leave the last image on e-paper.
 
-Protocol v2 requires updating both the client and firmware together. It does not
-fall back to the old plaintext v1 protocol. Existing per-device keys can be reused;
+The two-day calendar uses semantic schema v3 inside the existing encrypted v2
+transport, with a 2,048-byte packet limit. Update the client and firmware together.
+Receivers retain support for one-day v2 data; no plaintext-v1 fallback is allowed.
+Existing per-device keys can be reused;
 do not overwrite or publish the generated credential files.
 
 Both variants are independent of Home Assistant. Future integrations can produce

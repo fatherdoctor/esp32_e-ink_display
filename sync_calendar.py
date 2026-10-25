@@ -17,7 +17,7 @@ import secrets
 # Keep Bleak's main thread MTA; Outlook COM lives in its own STA worker.
 sys.coinit_flags = 0
 from calendar_core import (Event, SERVICE_UUID, WRITE_UUID, STATUS_UUID,
-                           demo_events, device_proof, encode, frames, local_bounds, payload)
+                           calendar_bounds, demo_events, device_proof, encode, frames, local_bounds, payload)
 
 LOG = logging.getLogger("inkplate")
 
@@ -46,7 +46,7 @@ def outlook_date(epoch: int, locale_name: str | None = None) -> str:
 
 
 def read_outlook(now: datetime) -> list[Event]:
-    """Read the default local calendar, including occurrences and day overlaps."""
+    """Read today and tomorrow, including occurrences and midnight overlaps."""
     import pythoncom
     import win32com.client
     pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
@@ -58,7 +58,7 @@ def read_outlook(now: datetime) -> list[Event]:
         items = folder.Items
         items.Sort("[Start]")
         items.IncludeRecurrences = True
-        start, end, _ = local_bounds(now)
+        start, _, end, _ = calendar_bounds(now)
         # Outlook Jet date filters expect local wall time and no seconds.
         # Double any literal apostrophes in regional separators/AM-PM designators.
         fmt = lambda t: outlook_date(t).replace("'", "''")

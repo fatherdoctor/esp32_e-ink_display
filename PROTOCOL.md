@@ -1,4 +1,4 @@
-# Calendar protocol v2
+# Encrypted display transport v2 and calendar schema v3
 
 Service `79dc1000-48c5-4b86-b403-184557b01e14` exposes:
 
@@ -38,7 +38,7 @@ Use AES-256-GCM with a fresh random 12-byte nonce and additional authenticated d
 
 `aes_nonce[12] || ciphertext || gcm_tag[16]`
 
-The 1024-byte maximum includes this 28-byte overhead. The plaintext is compact
+The 2048-byte maximum includes this 28-byte overhead. The plaintext is compact
 ASCII JSON. Encryption keeps calendar details private even if a malicious peer
 relays the live proof. The fresh device nonce prevents replaying a captured
 packet into a new session after reset. Never reuse an AES nonce with the same key.
@@ -58,19 +58,25 @@ ATT write responses do not establish application acceptance.
 
 | Field | Meaning |
 | --- | --- |
-| `v` | Integer 2 |
+| `v` | Integer 3 for two-day calendar data; receivers also accept legacy one-day 2 |
+| `kind` | `calendar` for schema 3; other kinds are currently rejected |
 | `id` | Eight hexadecimal transaction-ID characters |
 | `now` | Current UTC epoch seconds, taken after pairing and extraction |
 | `day`, `end` | UTC epochs of local midnight today and tomorrow; end is exclusive |
 | `morning` | UTC epoch of tomorrow's local 07:00 |
 | `until` | Exclusive schedule knowledge horizon, no later than `end` |
+| `tomorrow_end` | UTC epoch of local midnight after tomorrow, computed independently |
+| `tomorrow_until` | Tomorrow's exclusive knowledge horizon, between `end` and `tomorrow_end` |
 | `tz` | 1-4 `[effective_utc_epoch, offset_seconds]` rows |
-| `events` | 0-6 `[start_utc, end_utc, subject, location, status]` rows |
+| `events` | 0-12 `[start_utc, end_utc, subject, location, status]` rows; at most six per day |
 
 Event start is inclusive and end exclusive. Rows are sorted by start then end.
 Status 2 is busy and 3 out of office. Subjects/locations are printable ASCII,
 at most 32/20 characters; escaping may shorten text further to fit the limit.
-All timestamps are UTC POSIX epochs.
+All timestamps are UTC POSIX epochs. Overnight entries are transmitted once and
+can appear in both day columns. The two daily knowledge horizons are independent.
+At midnight the cache can still describe the new today; a third calendar day is
+unknown until another sync. Morning sync windows continue to refresh the cache.
 
 The timezone table starts at or before midnight and every displayed event's
 start, retaining historical offsets for meetings spanning DST changes. It

@@ -22,11 +22,11 @@ are allowed; firmware can be built/flashed on a personal computer.
 
 1. The Python client scans for the display every 10 minutes. If absent, it waits
    quietly and does not open Outlook.
-2. When found, it reads today's default Outlook calendar through local COM/MAPI.
+2. When found, it reads today and tomorrow from the default Outlook calendar through local COM/MAPI.
    Sort comes before recurrence expansion and filtering. Events overlapping
    midnight are included. Free, canceled and declined appointments are excluded;
    tentative and working-elsewhere appointments conservatively count as busy.
-3. The next six current/future events, current UTC time, local-day boundaries,
+3. Up to six current/future events per day, current UTC time, local-day boundaries,
    tomorrow's 07:00 time and UTC-offset changes are sent over encrypted BLE.
    Private/confidential titles and locations are redacted by default.
 4. The display authenticates and validates the entire packet before replacing

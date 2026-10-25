@@ -8,8 +8,8 @@ Wi-Fi. It is not the older XIAO ESP32-C3 panel or the retail TRMNL OG.
 
 Compiled successfully on Windows on 2026-10-25 with PlatformIO 6.1.18,
 espressif32 6.12.0, Arduino-ESP32 2.0.17, GxEPD2 1.6.5, Adafruit GFX 1.12.1,
-Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The initial build used 93,876 bytes
-of static RAM and 951,985 bytes of flash. Hardware behavior is not yet validated.
+Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The latest local two-day UI build uses
+98,996 bytes of static RAM and 979,201 bytes of flash. Hardware behavior is not yet validated.
 
 The PlatformIO XIAO S3 profile is overridden for the PLUS's 16 MB flash and 8 MB
 OPI PSRAM. Its opening summary still names the base 8 MB board; the generated
@@ -64,10 +64,13 @@ multimeter if necessary; voltage is not treated as a charge percentage.
 
 ## Behavior
 
-- **AVAILABLE:** large black text on a white, outlined banner.
-- **IN MEETING / OUT OF OFFICE:** white text on a solid black banner.
-- **SYNC NEEDED / DONE FOR DAY:** text plus a hatched lower border.
-- Six agenda entries and a last-sync/battery footer fit the 800x480 panel.
+- A date header and large availability/location details occupy the left sidebar.
+- The right side shows today and tomorrow as calendar timelines; current meetings
+  use solid black blocks, overlaps use lanes, and unknown time is hatched.
+- Each day carries up to six entries and its own knowledge cutoff. At midnight,
+  cached tomorrow becomes today. The next, uncached day is marked unknown.
+- Page models/renderers are separate modules; a dashboard-card renderer is also
+  available for a future data adapter. See [the rendering guide](ui/README.md).
 - UTC time is set through `settimeofday`. ESP-IDF advances it through deep sleep
   using the ESP32 RTC slow clock. No external clock chip or NTP is used.
 - A reset or power cycle invalidates the clock and schedule. A normal deep-sleep
@@ -98,7 +101,7 @@ pairing. Use the displayed PIN. Once synthetic events work, press KEY1 and run
 
 ## Hardware acceptance checks
 
-1. Confirm all text and all six agenda rows render correctly with synthetic data.
+1. Confirm the sidebar and both timeline columns render with synthetic data.
 2. Pair on Windows, accept a packet, and reconnect after timer and button wakes.
 3. Check status at start/end boundaries, overlaps, midnight, and the seventh-event
    horizon. A canceled meeting needs another sync before the display knows it.

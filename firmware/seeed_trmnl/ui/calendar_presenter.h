@@ -1,0 +1,93 @@
+#pragma once
+#include "page_models.h"
+
+// This presenter translates the semantic calendar into a page model. It does
+// not draw, refresh, sleep, connect to BLE, or know where the data came from.
+namespace epaper_ui {
+inline String dateText(uint32_t epoch, const char *format) {
+    time_t value = time_t(epoch) + utcOffset(epoch);
+    struct tm local;
+    gmtime_r(&value, &local);
+    char buffer[40]; strftime(buffer, sizeof(buffer), format, &local);
+    return String(buffer);
+}
+inline int minuteOfDay(uint32_t epoch) {
+    time_t value = time_t(epoch) + utcOffset(epoch);
+    struct tm local; gmtime_r(&value, &local);
+    return local.tm_hour * 60 + local.tm_min;
+}
+inline CalendarPage presentCalendar(uint32_t now, float voltage) {
+    CalendarPage m;
+    bool valid = currentDay(now), known = valid && now < knowledgeUntil(now);
+    if (validClock(now)) {
+        m.day = dateText(now, "%d"); m.weekday = dateText(now, "%A");
+        m.monthYear = dateText(now, "%B %Y");
+    } else { m.day = "--"; m.weekday = "Calendar"; m.monthYear = "Sync to set date"; }
+    uint32_t todayEnd = calendarDayEnd(now), nextStart = todayEnd;
+    uint32_t busyEnd = now;
+    int active = -1, next = -1;
+    for (int i = 0; i < calendar.count; ++i) {
+        const Event &e = calendar.events[i];
+        if (e.start <= now && e.end > now) {
+            if (active < 0 || e.status == 3) active = i;
+            busyEnd = max(busyEnd, e.end);
+        }
+        if (e.start > now && e.start < todayEnd) nextStart = min(nextStart, e.start);
+        if (e.start > now && (next < 0 || e.start < calendar.events[next].start)) next = i;
+    }
+    if (active >= 0) for (int pass = 0; pass < 12; ++pass)
+        for (int i = 0; i < calendar.count; ++i)
+            if (calendar.events[i].start <= busyEnd && calendar.events[i].end > busyEnd)
+                busyEnd = calendar.events[i].end;
+    if (!known) {
+        m.status = Availability::Unknown; m.location = "Press KEY1 to sync";
+        m.subject = "Incomplete or stale schedule"; m.nextAvailable = "Unknown";
+    } else if (active >= 0) {
+        const Event &e = calendar.events[active];
+        m.status = e.status == 3 ? Availability::OutOfOffice : Availability::Meeting;
+        m.location = strlen(e.location) ? String(e.location) : "Location not provided";
+        m.subject = e.subject;
+        uint32_t horizon = knowledgeUntil(now);
+        if (now < calendar.end && calendar.until == calendar.end) horizon = calendar.tomorrowUntil;
+        m.nextAvailable = busyEnd < horizon ? (busyEnd >= todayEnd ? "Tomorrow" : hhmm(busyEnd)) : "Unknown";
+        m.availabilityDetail = m.nextAvailable == "Unknown" ? "Sync for later availability" :
+            busyEnd >= todayEnd ? "At " + hhmm(busyEnd) : "After this meeting block";
+    } else {
+        bool done = nextStart == todayEnd && knowledgeUntil(now) == todayEnd;
+        m.status = done ? Availability::Done : Availability::Available;
+        m.location = done ? "No more meetings today" : "You can stop by";
+        m.subject = done ? "" : "Free until " + hhmm(min(nextStart, knowledgeUntil(now)));
+        m.nextAvailable = "Now"; m.availabilityDetail = "";
+    }
+    if (known && next >= 0) {
+        const Event &e = calendar.events[next];
+        m.nextUp = (e.start >= todayEnd ? dateText(e.start, "%a ") : "") + hhmm(e.start) + " " + e.subject;
+    } else m.nextUp = known ? "No later meetings" : "Sync needed";
+    for (int col = 0; col < 2; ++col) {
+        DayColumn &d = m.columns[col];
+        uint32_t from = col == 0 ? (now < calendar.end ? calendar.day : calendar.end) : todayEnd;
+        uint32_t to = col == 0 ? todayEnd : calendar.tomorrowEnd;
+        d.label = col == 0 ? "TODAY" : "TOMORROW";
+        d.covered = valid && (col == 0 || now < calendar.end) && to > from;
+        d.date = d.covered || valid ? dateText(from, "%a, %b %d") : "Awaiting sync";
+        uint32_t horizon = col == 0 ? knowledgeUntil(now) : calendar.tomorrowUntil;
+        d.coverageMinute = horizon >= to ? 1440 : minuteOfDay(horizon);
+        if (!d.covered) continue;
+        for (int i = 0; i < calendar.count; ++i) {
+            const Event &e = calendar.events[i];
+            if (e.end <= from || e.start >= to) continue;
+            if (e.start <= from && e.end >= to) { d.allDay = String("ALL DAY: ") + e.subject; continue; }
+            if (d.count >= 12) break;
+            TimelineEvent &block = d.events[d.count++];
+            block.startMinute = e.start <= from ? 0 : minuteOfDay(e.start);
+            block.endMinute = e.end >= to ? 1440 : minuteOfDay(e.end);
+            block.title = e.subject;
+            block.active = e.start <= now && e.end > now;
+        }
+    }
+    m.footer = retained() ? "Synced " + dateText(calendar.synced, "%a ") + hhmm(calendar.synced) : "Not synchronized";
+    m.footer += "    KEY1: Sync";
+    if (voltage > 2.5f && voltage < 4.6f) m.footer += "    Battery " + String(voltage, 2) + "V";
+    return m;
+}
+} // namespace epaper_ui

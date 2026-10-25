@@ -33,7 +33,7 @@ def decrypt(packet, challenge=CHALLENGE):
 
 
 def build(events):
-    with patch.object(core, 'local_bounds', return_value=(DAY, END, MORNING)), \
+    with patch.object(core, 'calendar_bounds', return_value=(DAY, END, END + 86400, MORNING)), \
          patch.object(core, 'offsets', return_value=[[DAY, -18000]]):
         return core.payload(events, NOW)
 
@@ -44,7 +44,7 @@ class CalendarTests(unittest.TestCase):
                   core.Event(EPOCH, EPOCH + 500, 'Free', status=0),
                   core.Event(EPOCH - 100, EPOCH, 'Ended'),
                   core.Event(END, END + 100, 'Tomorrow')]
-        self.assertEqual([r[2] for r in build(events)['events']], ['Overnight'])
+        self.assertEqual([r[2] for r in build(events)['events']], ['Overnight', 'Tomorrow'])
 
     def test_six_limit_does_not_claim_unknown_time_free(self):
         events = [core.Event(EPOCH + i * 100, EPOCH + i * 100 + 50, str(i)) for i in range(8)]
@@ -55,6 +55,31 @@ class CalendarTests(unittest.TestCase):
     def test_more_than_six_active_is_unknown_immediately(self):
         events = [core.Event(EPOCH - 100, EPOCH + 500 + i, str(i)) for i in range(7)]
         self.assertEqual(build(events)['until'], EPOCH)
+
+    def test_today_and_tomorrow_have_separate_limits_and_horizons(self):
+        today = [core.Event(EPOCH + i * 100, EPOCH + i * 100 + 50, f'Today {i}') for i in range(7)]
+        tomorrow = [core.Event(END + i * 100, END + i * 100 + 50, f'Tomorrow {i}') for i in range(7)]
+        data = build(today + tomorrow)
+        self.assertEqual(len(data['events']), 12)
+        self.assertEqual(data['until'], EPOCH + 600)
+        self.assertEqual(data['tomorrow_until'], END + 600)
+        self.assertEqual(data['tomorrow_end'], END + 86400)
+        self.assertEqual(data['kind'], 'calendar')
+
+    def test_overnight_event_is_not_duplicated_between_days(self):
+        event = core.Event(END - 100, END + 100, 'Overnight')
+        data = build([event])
+        self.assertEqual(len(data['events']), 1)
+        self.assertEqual(data['until'], END)
+        self.assertEqual(data['tomorrow_until'], END + 86400)
+
+    def test_two_days_of_escaped_labels_fit_the_encrypted_packet(self):
+        events = [core.Event(base + i, base + 100, '"' * 32, '\\' * 20)
+                  for base in (EPOCH, END) for i in range(6)]
+        data = build(events)
+        packet = core.encode(data, KEY, CHALLENGE)
+        self.assertLessEqual(len(packet), core.MAX_PACKET)
+        self.assertEqual(len(decrypt(packet)['events']), 12)
 
     def test_private_titles_and_locations_are_redacted(self):
         row = build([core.Event(EPOCH, EPOCH + 50, 'Medical', 'Clinic', private=True)])['events'][0]
@@ -68,7 +93,7 @@ class CalendarTests(unittest.TestCase):
     def test_worst_case_json_stays_bounded_and_authenticated(self):
         data = build([core.Event(EPOCH + i, EPOCH + 100, '"' * 32, '\\' * 20) for i in range(6)])
         packet = core.encode(data, KEY, CHALLENGE)
-        self.assertLessEqual(len(packet), 1024)
+        self.assertLessEqual(len(packet), 2048)
         self.assertNotIn(b'events', packet)
         decoded = decrypt(packet)
         self.assertEqual(len(decoded['events']), 6)
@@ -84,12 +109,12 @@ class CalendarTests(unittest.TestCase):
 
     def test_rejects_bad_key_and_oversized_frame(self):
         with self.assertRaises(ValueError): core.encode(build([]), b'bad', CHALLENGE)
-        with self.assertRaises(ValueError): list(core.frames(b'x' * 1025))
+        with self.assertRaises(ValueError): list(core.frames(b'x' * 2049))
 
     def test_dry_run_has_no_optional_dependency_requirement(self):
         result = subprocess.run([sys.executable, 'sync_calendar.py', '--dry-run'],
                                 check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)['v'], 2)
+        self.assertEqual(json.loads(result.stdout)['v'], 3)
 
     def test_day_bounds_use_independent_wall_clock_conversions(self):
         # Windows local timezone rules, including 23/25-hour dates when applicable.
@@ -103,6 +128,9 @@ class CalendarTests(unittest.TestCase):
             expected_end = int(time.mktime(tomorrow.timetuple()))
             expected_morning = int(time.mktime((tomorrow + core.timedelta(hours=7)).timetuple()))
             self.assertEqual((start, end, morning), (expected_start, expected_end, expected_morning))
+            two_day = core.calendar_bounds(when)
+            expected_day_after = int(time.mktime((tomorrow + core.timedelta(days=1)).timetuple()))
+            self.assertEqual(two_day, (expected_start, expected_end, expected_day_after, expected_morning))
 
     def test_provisioning_matches_keys_and_refuses_overwrite(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -285,7 +313,7 @@ class SecurityAndTimeTests(unittest.TestCase):
                 def utcoffset(self): return core.timedelta(seconds=before if self.t < transition else after)
             fake_dt = types.SimpleNamespace(fromtimestamp=Instant)
             with patch.object(core, 'datetime', fake_dt), \
-                 patch.object(core, 'local_bounds', return_value=(day, day + 86400, day + 111600)):
+                 patch.object(core, 'calendar_bounds', return_value=(day, day + 86400, day + 172800, day + 111600)):
                 data = core.payload([core.Event(start, transition + 7200, 'DST meeting')], now)
             self.assertEqual(data['tz'], [[day, before], [transition, after]])
             self.assertLessEqual(data['tz'][0][0], data['events'][0][0])
