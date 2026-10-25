@@ -14,6 +14,9 @@ SERVICE_UUID = "79dc1000-48c5-4b86-b403-184557b01e14"
 WRITE_UUID = "79dc1001-48c5-4b86-b403-184557b01e14"
 STATUS_UUID = "79dc1002-48c5-4b86-b403-184557b01e14"
 MAX_PACKET = 1024
+AUTH_DOMAIN = b"calendar-display-auth-v2"
+KEY_DOMAIN = b"calendar-display-encryption-v2"
+PAYLOAD_DOMAIN = b"calendar-display-payload-v2"
 
 
 @dataclass(frozen=True)
@@ -81,26 +84,38 @@ def payload(events: list[Event], now: datetime | None = None,
              clean(e.subject, 32) if not e.private or show_private else "Private appointment",
              clean(e.location, 20) if not e.private or show_private else "",
              3 if e.status == 3 else 2] for e in selected]
-    return {"v": 1, "id": secrets.token_hex(4), "now": epoch, "day": start,
+    zone_start = min([start] + [e.start for e in selected])
+    return {"v": 2, "id": secrets.token_hex(4), "now": epoch, "day": start,
             "end": end, "morning": morning, "until": horizon,
-            "tz": offsets(epoch, morning), "events": rows}
+            "tz": offsets(zone_start, morning), "events": rows}
 
 
-def encode(data: dict, key: bytes) -> bytes:
+def device_proof(key: bytes, challenge: bytes) -> bytes:
+    if len(key) != 32 or len(challenge) != 32:
+        raise ValueError("Invalid key or authentication challenge")
+    return b"P" + challenge[16:] + hmac.digest(key, AUTH_DOMAIN + challenge, hashlib.sha256)
+
+
+def encode(data: dict, key: bytes, challenge: bytes) -> bytes:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     if len(key) != 32:
         raise ValueError("Sync key must be 32 bytes")
+    if len(challenge) != 32:
+        raise ValueError("Authentication challenge must contain both 16-byte nonces")
     data = deepcopy(data)
     body = json.dumps(data, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     # Quotes/backslashes double when JSON escaped. Preserve all times and rows,
     # shortening the longest labels only if pathological text exceeds the limit.
-    while len(body) + 32 > MAX_PACKET:
+    while len(body) + 28 > MAX_PACKET:
         candidates = [(row, field) for row in data["events"] for field in (2, 3) if row[field]]
         if not candidates:
             raise ValueError("Schedule metadata exceeds packet limit")
         row, field = max(candidates, key=lambda pair: len(pair[0][pair[1]]))
         row[field] = row[field][:-1]
         body = json.dumps(data, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-    packet = body + hmac.digest(key, body, hashlib.sha256)
+    encryption_key = hmac.digest(key, KEY_DOMAIN, hashlib.sha256)
+    nonce = secrets.token_bytes(12)
+    packet = nonce + AESGCM(encryption_key).encrypt(nonce, body, PAYLOAD_DOMAIN + challenge)
     if len(packet) > MAX_PACKET:
         raise ValueError(f"Payload is {len(packet)} bytes; maximum is {MAX_PACKET}")
     return packet
@@ -108,7 +123,7 @@ def encode(data: dict, key: bytes) -> bytes:
 
 def frames(packet: bytes):
     """Works at the default ATT MTU: every write is <=20 bytes."""
-    if not 32 < len(packet) <= MAX_PACKET:
+    if not 28 < len(packet) <= MAX_PACKET:
         raise ValueError("Invalid packet length")
     yield b"B" + len(packet).to_bytes(2, "little")
     for cursor in range(0, len(packet), 19):

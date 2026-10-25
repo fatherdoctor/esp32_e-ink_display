@@ -10,6 +10,9 @@ from pathlib import Path
 import time
 import types
 import unittest
+import os
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from unittest.mock import patch
 
 import calendar_core as core
@@ -21,11 +24,17 @@ DAY = EPOCH - 36000
 END = DAY + 86400
 MORNING = END + 25200
 KEY = bytes(range(32))
+CHALLENGE = bytes(range(32))
+
+
+def decrypt(packet, challenge=CHALLENGE):
+    key = hmac.digest(KEY, core.KEY_DOMAIN, hashlib.sha256)
+    return json.loads(AESGCM(key).decrypt(packet[:12], packet[12:], core.PAYLOAD_DOMAIN + challenge))
 
 
 def build(events):
     with patch.object(core, 'local_bounds', return_value=(DAY, END, MORNING)), \
-         patch.object(core, 'offsets', return_value=[[EPOCH, -18000]]):
+         patch.object(core, 'offsets', return_value=[[DAY, -18000]]):
         return core.payload(events, NOW)
 
 
@@ -58,15 +67,15 @@ class CalendarTests(unittest.TestCase):
 
     def test_worst_case_json_stays_bounded_and_authenticated(self):
         data = build([core.Event(EPOCH + i, EPOCH + 100, '"' * 32, '\\' * 20) for i in range(6)])
-        packet = core.encode(data, KEY)
+        packet = core.encode(data, KEY, CHALLENGE)
         self.assertLessEqual(len(packet), 1024)
-        self.assertTrue(hmac.compare_digest(packet[-32:], hmac.digest(KEY, packet[:-32], hashlib.sha256)))
-        decoded = json.loads(packet[:-32])
+        self.assertNotIn(b'events', packet)
+        decoded = decrypt(packet)
         self.assertEqual(len(decoded['events']), 6)
         self.assertEqual(decoded['events'][5][:2], [EPOCH + 5, EPOCH + 100])
 
     def test_wire_reassembly_at_minimum_mtu(self):
-        packet = core.encode(build([]), KEY)
+        packet = core.encode(build([]), KEY, CHALLENGE)
         frames = list(core.frames(packet))
         self.assertTrue(all(len(frame) <= 20 for frame in frames))
         self.assertEqual(int.from_bytes(frames[0][1:], 'little'), len(packet))
@@ -74,13 +83,13 @@ class CalendarTests(unittest.TestCase):
         self.assertEqual(frames[-1], b'C')
 
     def test_rejects_bad_key_and_oversized_frame(self):
-        with self.assertRaises(ValueError): core.encode(build([]), b'bad')
+        with self.assertRaises(ValueError): core.encode(build([]), b'bad', CHALLENGE)
         with self.assertRaises(ValueError): list(core.frames(b'x' * 1025))
 
     def test_dry_run_has_no_optional_dependency_requirement(self):
         result = subprocess.run([sys.executable, 'sync_calendar.py', '--dry-run'],
                                 check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)['v'], 1)
+        self.assertEqual(json.loads(result.stdout)['v'], 2)
 
     def test_day_bounds_use_independent_wall_clock_conversions(self):
         # Windows local timezone rules, including 23/25-hour dates when applicable.
@@ -160,7 +169,7 @@ class OutlookTests(unittest.TestCase):
         fakewin = types.ModuleType('win32com')
         fakewin.client = fakeclient
         with patch.dict(sys.modules, {'pythoncom': fakecom, 'win32com': fakewin,
-                                      'win32com.client': fakeclient}):
+                                      'win32com.client': fakeclient}), patch.object(client, 'outlook_date', return_value='25/10/2026 00:00'):
             events = client.read_outlook(NOW)
         self.assertEqual([kind for kind, _ in calls],
                          ['initialize', 'sort', 'recurrences', 'restrict', 'uninitialize'])
@@ -172,33 +181,140 @@ class OutlookTests(unittest.TestCase):
 
 
 class FakeBleClient:
-    status = b'OK:12345678'
     writes = []
     disconnected = False
-    def __init__(self, *args, **kwargs): pass
-    async def __aenter__(self): return self
+    counterfeit = False
+    replayed_proof = False
+    reject = False
+    advance_clock = None
+    accepted_payload = None
+    def __init__(self, *args, **kwargs):
+        self.packet = bytearray()
+        self.status = b'READY'
+        self.challenge = None
+    async def __aenter__(self):
+        if self.advance_clock is not None:
+            self.advance_clock[0] += 45
+        return self
     async def __aexit__(self, *args): type(self).disconnected = True
     async def write_gatt_char(self, uuid, data, response):
         if response is not True: raise AssertionError('Expected acknowledged ATT write')
         self.writes.append(bytes(data))
+        if data[:1] == b'A':
+            self.challenge = bytes(data[1:]) + b's' * 16
+            self.status = (b'P' + bytes(48) if self.counterfeit else
+                core.device_proof(KEY, b'x' * 32 if self.replayed_proof else self.challenge))
+        elif data[:1] == b'D':
+            self.packet.extend(data[1:])
+        elif data == b'C':
+            type(self).accepted_payload = decrypt(bytes(self.packet), self.challenge)
+            self.status = b'ERR:payload' if self.reject else b'OK:' + self.accepted_payload['id'].encode()
     async def read_gatt_char(self, uuid): return self.status
 
 
 class TransportTests(unittest.IsolatedAsyncioTestCase):
-    async def test_application_ack_and_disconnect(self):
-        FakeBleClient.status = b'OK:12345678'
+    def setUp(self):
         FakeBleClient.writes = []
         FakeBleClient.disconnected = False
-        with patch.dict(sys.modules, {'bleak': types.SimpleNamespace(BleakClient=FakeBleClient)}):
-            await client.transfer(object(), core.encode(build([]), KEY), '12345678', False)
+        FakeBleClient.counterfeit = FakeBleClient.replayed_proof = FakeBleClient.reject = False
+        FakeBleClient.advance_clock = None
+        FakeBleClient.accepted_payload = None
+        self.bleak = patch.dict(sys.modules, {'bleak': types.SimpleNamespace(BleakClient=FakeBleClient)})
+        self.bleak.start()
+        self.addCleanup(self.bleak.stop)
+
+    async def events(self, now):
+        return [core.Event(int(now.timestamp()), int(now.timestamp()) + 3600, 'Secret meeting')]
+
+    async def test_application_ack_and_disconnect(self):
+        count = await client.transfer(object(), self.events, KEY, False)
+        self.assertEqual(count, 1)
         self.assertTrue(FakeBleClient.disconnected)
+        self.assertEqual(FakeBleClient.writes[0][:1], b'A')
         self.assertEqual(FakeBleClient.writes[-1], b'C')
+        self.assertNotIn(b'Secret meeting', b''.join(FakeBleClient.writes))
 
     async def test_rejection_is_not_reported_as_success(self):
-        FakeBleClient.status = b'ERR:payload'
-        with patch.dict(sys.modules, {'bleak': types.SimpleNamespace(BleakClient=FakeBleClient)}):
-            with self.assertRaisesRegex(RuntimeError, 'rejected'):
-                await client.transfer(object(), core.encode(build([]), KEY), '12345678', False)
+        FakeBleClient.reject = True
+        with self.assertRaisesRegex(RuntimeError, 'rejected'):
+            await client.transfer(object(), self.events, KEY, False)
+
+    async def test_fake_or_replayed_device_proof_never_reads_calendar_or_sends_schedule(self):
+        for setting in ('counterfeit', 'replayed_proof'):
+            FakeBleClient.writes = []
+            setattr(FakeBleClient, setting, True)
+            async def forbidden(now):
+                self.fail('Calendar must not be read before recipient authentication')
+            with self.assertRaisesRegex(RuntimeError, 'identity'):
+                await client.transfer(object(), forbidden, KEY, False)
+            self.assertEqual([f[:1] for f in FakeBleClient.writes], [b'A'])
+            setattr(FakeBleClient, setting, False)
+
+    async def test_timestamp_is_created_after_slow_pairing(self):
+        clock = [0]
+        FakeBleClient.advance_clock = clock
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None): return NOW + core.timedelta(seconds=clock[0])
+        with patch.object(client, 'datetime', Clock):
+            await client.transfer(object(), self.events, KEY, True)
+        self.assertEqual(FakeBleClient.accepted_payload['now'], EPOCH + 45)
+
+
+class SecurityAndTimeTests(unittest.TestCase):
+    def test_encryption_rejects_wrong_challenge_and_tampering(self):
+        packet = core.encode(build([]), KEY, CHALLENGE)
+        with self.assertRaises(InvalidTag): decrypt(packet, b'x' * 32)
+        # Replaying the same client nonce after a receiver reset is insufficient:
+        # a new device nonce changes the authenticated session.
+        with self.assertRaises(InvalidTag): decrypt(packet, CHALLENGE[:16] + b'x' * 16)
+        changed = bytearray(packet)
+        changed[-1] ^= 1
+        with self.assertRaises(InvalidTag): decrypt(bytes(changed))
+        self.assertNotEqual(packet[:12], core.encode(build([]), KEY, CHALLENGE)[:12])
+
+    def test_active_event_retains_historical_dst_offset(self):
+        for transition, before, after in ((1793516400, -18000, -21600),
+                                          (1772956800, -21600, -18000)):
+            now = datetime.fromtimestamp(transition + 3600, timezone.utc)
+            start = transition - 1800
+            day = transition - 7200
+            class Instant:
+                def __init__(self, t): self.t = t
+                def astimezone(self): return self
+                def utcoffset(self): return core.timedelta(seconds=before if self.t < transition else after)
+            fake_dt = types.SimpleNamespace(fromtimestamp=Instant)
+            with patch.object(core, 'datetime', fake_dt), \
+                 patch.object(core, 'local_bounds', return_value=(day, day + 86400, day + 111600)):
+                data = core.payload([core.Event(start, transition + 7200, 'DST meeting')], now)
+            self.assertEqual(data['tz'], [[day, before], [transition, after]])
+            self.assertLessEqual(data['tz'][0][0], data['events'][0][0])
+
+    @unittest.skipUnless(os.name == 'nt', 'Uses native Windows regional APIs')
+    def test_windows_regional_outlook_dates(self):
+        us = client.outlook_date(EPOCH, 'en-US')
+        gb = client.outlook_date(EPOCH, 'en-GB')
+        self.assertIn('10/25/2026', us)
+        self.assertIn('25/10/2026', gb)
+        self.assertRegex(us, r' (AM|PM)$')
+        self.assertNotRegex(gb, r' (AM|PM)$')
+        self.assertNotRegex(gb, r'\d:\d{2}:\d{2}')
+
+    def test_malformed_config_is_a_handled_setup_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / 'bad.json'
+            for value in (None, [], {'key': 1}, {'key': KEY.hex(), 'address': 3}):
+                config.write_text(json.dumps(value), encoding='utf-8')
+                result = subprocess.run([sys.executable, 'sync_calendar.py', '--demo', '--once',
+                                         '--config', str(config)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertNotIn('Traceback', result.stderr)
+
+    def test_nonfinite_intervals_fail_before_starting(self):
+        for value in ('nan', 'inf', '-inf'):
+            result = subprocess.run([sys.executable, 'sync_calendar.py', '--interval=' + value,
+                                     '--dry-run'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
 
 
 if __name__ == '__main__':

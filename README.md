@@ -19,11 +19,14 @@ The Windows client and BLE wire protocol are shared by both variants.
 ## Architecture
 
 - `sync_calendar.py` scans every 10 minutes. If the display is absent, it waits
-  quietly without opening Outlook. When present, it reads the default calendar
+  quietly without opening Outlook. When present, it authenticates the display, then reads the default calendar
   and sends the next six current/future events.
 - `calendar_core.py` handles event selection, privacy redaction, UTC/local-time
-  metadata, bounded JSON packets, HMAC-SHA256 authentication and BLE framing.
-- The display validates the complete packet, synchronizes its clock and stores
+  metadata, bounded AES-GCM encrypted packets, device authentication and BLE framing.
+- The display proves possession of the per-device key using fresh client and
+  device nonces. The client verifies this before opening Outlook. The schedule
+  is encrypted end-to-end with AES-256-GCM, bound to that session. The display
+  validates the complete packet, synchronizes its clock and stores
   the schedule in RTC-retained memory. It acknowledges the exact transaction ID.
 - The radio turns off. The display wakes for meeting start/end boundaries,
   midnight, a morning sync window, or a button press. Overlapping meetings are
@@ -37,10 +40,11 @@ instructions for timing, reset and stale-calendar behavior.
 
 ## Local software tests
 
-Python 3.10+ is required. The core tests and synthetic dry run need no packages,
-Outlook, credentials, or Bluetooth hardware:
+Python 3.10+ is required. The synthetic dry run needs no extra packages. Tests require the encryption
+library, but no Outlook, credentials, or Bluetooth hardware:
 
 ```powershell
+python -m pip install -r requirements-test.txt
 python -m unittest discover -s tests -v
 python sync_calendar.py --dry-run
 ```
@@ -148,6 +152,10 @@ Windows pairing and bonded reconnect, internal clock drift, button wakes, and
 actual sleep current/battery life. Full refreshes are used initially. Timing is
 subject to clock drift, boot time and panel refresh; visible changes are not
 promised to be instantaneous. A power loss can leave the last image on e-paper.
+
+Protocol v2 requires updating both the client and firmware together. It does not
+fall back to the old plaintext v1 protocol. Existing per-device keys can be reused;
+do not overwrite or publish the generated credential files.
 
 Both variants are independent of Home Assistant. Future integrations can produce
 the same [BLE protocol](PROTOCOL.md) without changing the Windows calendar reader.

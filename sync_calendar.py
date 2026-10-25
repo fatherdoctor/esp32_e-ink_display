@@ -6,17 +6,43 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
+import hmac
 import logging
+import math
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
+import secrets
 
 # Keep Bleak's main thread MTA; Outlook COM lives in its own STA worker.
 sys.coinit_flags = 0
 from calendar_core import (Event, SERVICE_UUID, WRITE_UUID, STATUS_UUID,
-                           demo_events, encode, frames, local_bounds, payload)
+                           demo_events, device_proof, encode, frames, local_bounds, payload)
 
 LOG = logging.getLogger("inkplate")
+
+
+def outlook_date(epoch: int, locale_name: str | None = None) -> str:
+    """Use Windows user's date/time preferences, as Outlook's Jet parser does."""
+    import ctypes
+    from ctypes import wintypes
+    class SystemTime(ctypes.Structure):
+        _fields_ = [(name, wintypes.WORD) for name in
+                    ('year', 'month', 'weekday', 'day', 'hour', 'minute', 'second', 'millisecond')]
+    t = datetime.fromtimestamp(epoch)
+    value = SystemTime(t.year, t.month, (t.weekday() + 1) % 7, t.day, t.hour, t.minute, 0, 0)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    date_fn, time_fn = kernel.GetDateFormatEx, kernel.GetTimeFormatEx
+    common = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(SystemTime),
+              wintypes.LPCWSTR, wintypes.LPWSTR, ctypes.c_int]
+    date_fn.argtypes, time_fn.argtypes = common + [wintypes.LPCWSTR], common
+    date_fn.restype = time_fn.restype = ctypes.c_int
+    date_buffer, time_buffer = ctypes.create_unicode_buffer(128), ctypes.create_unicode_buffer(128)
+    if not date_fn(locale_name, 1, ctypes.byref(value), None, date_buffer, 128, None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not time_fn(locale_name, 2, ctypes.byref(value), None, time_buffer, 128): # TIME_NOSECONDS
+        raise ctypes.WinError(ctypes.get_last_error())
+    return date_buffer.value + ' ' + time_buffer.value
 
 
 def read_outlook(now: datetime) -> list[Event]:
@@ -34,7 +60,8 @@ def read_outlook(now: datetime) -> list[Event]:
         items.IncludeRecurrences = True
         start, end, _ = local_bounds(now)
         # Outlook Jet date filters expect local wall time and no seconds.
-        fmt = lambda t: datetime.fromtimestamp(t).strftime("%m/%d/%Y %I:%M %p")
+        # Double any literal apostrophes in regional separators/AM-PM designators.
+        fmt = lambda t: outlook_date(t).replace("'", "''")
         selected = items.Restrict(f"[Start] < '{fmt(end)}' AND [End] > '{fmt(start)}'")
         result = []
         # No Count: unbounded recurring series make that property undefined.
@@ -68,16 +95,38 @@ async def find_display(address: str | None, timeout: float):
                                                     service_uuids=[SERVICE_UUID])
 
 
-async def transfer(device, packet: bytes, transaction: str, pair: bool):
+async def authenticate(client, key: bytes) -> bytes:
+    client_nonce = secrets.token_bytes(16)
+    await client.write_gatt_char(WRITE_UUID, b'A' + client_nonce, response=True)
+    proof = bytes(await client.read_gatt_char(STATUS_UUID))
+    if len(proof) != 49 or proof[:1] != b'P':
+        raise RuntimeError("Display identity verification failed")
+    challenge = client_nonce + proof[1:17]
+    if not hmac.compare_digest(proof, device_proof(key, challenge)):
+        raise RuntimeError("Display identity verification failed")
+    return challenge
+
+
+async def transfer(device, get_events, key: bytes, pair: bool, show_private: bool = False):
+    """Authenticate before reading Outlook; timestamp only after pairing/extraction."""
     from bleak import BleakClient
     async with BleakClient(device, pair=pair, timeout=60 if pair else 20) as client:
+        challenge = await asyncio.wait_for(authenticate(client, key), timeout=15)
+        extracted_at = datetime.now(timezone.utc)
+        events = await get_events(extracted_at)
+        fresh = datetime.now(timezone.utc)
+        if local_bounds(extracted_at)[:2] != local_bounds(fresh)[:2]:
+            raise RuntimeError("Local date changed during extraction; retry")
+        data = payload(events, fresh, show_private)
+        packet = encode(data, key, challenge)
+        transaction = data['id']
         for frame in frames(packet):
             await client.write_gatt_char(WRITE_UUID, frame, response=True)
         deadline = asyncio.get_running_loop().time() + 10
         while asyncio.get_running_loop().time() < deadline:
             status = bytes(await client.read_gatt_char(STATUS_UUID)).decode("ascii", "replace")
             if status == f"OK:{transaction}":
-                return
+                return len(data['events'])
             if status.startswith("ERR:"):
                 raise RuntimeError(f"Display rejected payload ({status})")
             await asyncio.sleep(0.1)
@@ -92,10 +141,14 @@ async def run(args) -> int:
         return 0
     try:
         config = json.loads(args.config.read_text(encoding="utf-8"))
+        if not isinstance(config, dict) or not isinstance(config.get('key'), str):
+            raise ValueError('Configuration must be an object with a string key')
+        if config.get('address') is not None and not isinstance(config['address'], str):
+            raise ValueError('Display address must be a string')
         key = bytes.fromhex(config["key"])
         if len(key) != 32:
             raise ValueError("Invalid key")
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError):
         LOG.error("Missing/invalid config; run provision.py on the personal computer first")
         return 2
     # Import on the main MTA thread first; explicit STA initialization then applies
@@ -107,6 +160,10 @@ async def run(args) -> int:
             LOG.error("pywin32 is missing; install requirements in your user virtual environment")
             return 2
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="outlook")
+    async def get_events(now):
+        if args.demo:
+            return demo_events(now)
+        return await asyncio.get_running_loop().run_in_executor(executor, read_outlook, now)
     try:
         while True:
             try:
@@ -116,16 +173,8 @@ async def run(args) -> int:
                     if args.once:
                         return 3
                 else:
-                    now = datetime.now(timezone.utc)
-                    events = (demo_events(now) if args.demo else
-                              await asyncio.get_running_loop().run_in_executor(executor, read_outlook, now))
-                    # Stamp clock close to transmission; day rollover forces a fresh read next try.
-                    fresh = datetime.now(timezone.utc)
-                    if local_bounds(now)[:2] != local_bounds(fresh)[:2]:
-                        raise RuntimeError("Local date changed during extraction; retry")
-                    data = payload(events, fresh, args.show_private)
-                    await transfer(device, encode(data, key), data["id"], args.pair)
-                    LOG.info("Schedule accepted (%d events)", len(data["events"]))
+                    count = await transfer(device, get_events, key, args.pair, args.show_private)
+                    LOG.info("Schedule accepted (%d events)", count)
                     if args.once:
                         return 0
             except Exception as error:
@@ -151,7 +200,7 @@ def main() -> int:
     parser.add_argument("--show-private", action="store_true", help="Reveal private appointment titles")
     parser.add_argument("--log", type=Path)
     args = parser.parse_args()
-    if args.interval <= 0 or args.scan_seconds <= 0:
+    if not all(math.isfinite(v) and v > 0 for v in (args.interval, args.scan_seconds)):
         parser.error("Intervals must be positive")
     handler = (RotatingFileHandler(args.log, maxBytes=100000, backupCount=2, encoding="utf-8")
                if args.log else logging.StreamHandler())

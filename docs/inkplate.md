@@ -82,6 +82,7 @@ In PowerShell, using the installed Python launcher:
 
 ```powershell
 Set-Location C:\dev\InkplateCalendar
+py -3 -m pip install -r requirements-test.txt
 py -3 -m unittest discover -s tests -v
 py -3 .\sync_calendar.py --dry-run
 ```
@@ -103,9 +104,9 @@ in a shared repository or paste them into chat. The pairing PIN appears on the
 display during sync; the key itself is never displayed or logged.
 
 BLE characteristic access requires encrypted, authenticated pairing with a PIN.
-Each packet also has an HMAC-SHA256 tag using the generated 256-bit key. The key
-authenticates the laptop to the display; BLE pairing supplies transport
-confidentiality. This configuration still needs an actual Windows/ESP32 pairing
+Protocol v2 adds a fresh mutual-nonce device proof before calendar extraction,
+then AES-256-GCM encryption of each schedule bound to that session. BLE pairing
+also secures the transport. Both client and firmware must be updated together. This configuration still needs an actual Windows/ESP32 pairing
 test. Use synthetic events for that first test.
 
 ## 3. Build and flash on the personal computer

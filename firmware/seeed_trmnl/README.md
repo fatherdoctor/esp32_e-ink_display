@@ -8,8 +8,8 @@ Wi-Fi. It is not the older XIAO ESP32-C3 panel or the retail TRMNL OG.
 
 Compiled successfully on Windows on 2026-10-25 with PlatformIO 6.1.18,
 espressif32 6.12.0, Arduino-ESP32 2.0.17, GxEPD2 1.6.5, Adafruit GFX 1.12.1,
-Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The initial build used 93,844 bytes
-of static RAM and 948,733 bytes of flash. Hardware behavior is not yet validated.
+Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The initial build used 93,876 bytes
+of static RAM and 951,985 bytes of flash. Hardware behavior is not yet validated.
 
 The PlatformIO XIAO S3 profile is overridden for the PLUS's 16 MB flash and 8 MB
 OPI PSRAM. Its opening summary still names the base 8 MB board; the generated
@@ -85,6 +85,11 @@ multimeter if necessary; voltage is not treated as a charge percentage.
   coordinate the laptop polling interval with the window length. Default is zero.
 - The BLE stack stops, the panel hibernates, and the battery divider is disabled
   before sleep. GPIO6 is held low through sleep; KEY1 uses an RTC-domain pullup.
+
+Protocol v2 proves device identity before reading Outlook and encrypts the
+schedule with AES-256-GCM using fresh client/device nonces. Upgrade the client
+and firmware together; there is no plaintext-v1 fallback. Existing keys remain
+usable.
 
 The Windows client and wire protocol are shared with the Inkplate variant:
 press KEY1, then run `sync_calendar.py --demo --once --pair` visibly for the first

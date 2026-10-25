@@ -15,8 +15,10 @@
 #include <esp_sleep.h>
 #include <esp_arduino_version.h>
 #include <esp_system.h>
+#include <esp_random.h>
 #include <driver/rtc_io.h>
 #include <mbedtls/md.h>
+#include <mbedtls/gcm.h>
 #include <sys/time.h>
 #include <time.h>
 #include "board_config.h"
@@ -54,6 +56,11 @@ uint8_t receiveBuffer[MAX_PACKET];
 size_t received = 0, expected = 0;
 uint32_t receiveStarted = 0;
 bool committed = false;
+bool haveChallenge = false;
+uint8_t authNonce[32];
+static const char AUTH_DOMAIN[] = "calendar-display-auth-v2";
+static const char KEY_DOMAIN[] = "calendar-display-encryption-v2";
+static const char PAYLOAD_DOMAIN[] = "calendar-display-payload-v2";
 volatile bool connected = false;
 
 uint32_t clockNow() {
@@ -87,7 +94,7 @@ class ServerCallbacks : public BLEServerCallbacks {
         connected = false;
         xSemaphoreTake(rxMutex, portMAX_DELAY);
         // A committed transaction belongs to the main loop even after disconnect.
-        if (!committed) received = expected = 0;
+        if (!committed) { received = expected = 0; haveChallenge = false; }
         xSemaphoreGive(rxMutex);
         server->startAdvertising();
     }
@@ -102,11 +109,24 @@ class WriteCallbacks : public BLECharacteristicCallbacks {
         if (!n) return;
         xSemaphoreTake(rxMutex, portMAX_DELAY);
         if (committed) { xSemaphoreGive(rxMutex); return; }
-        if (bytes[0] == 'B' && n == 3) {
+        if (bytes[0] == 'A' && n == 17) {
+            received = expected = 0;
+            memcpy(authNonce, bytes + 1, 16);
+            esp_fill_random(authNonce + 16, 16);
+            uint8_t input[sizeof(AUTH_DOMAIN) - 1 + 32], proof[49];
+            memcpy(input, AUTH_DOMAIN, sizeof(AUTH_DOMAIN) - 1);
+            memcpy(input + sizeof(AUTH_DOMAIN) - 1, authNonce, 32);
+            proof[0] = 'P';
+            memcpy(proof + 1, authNonce + 16, 16);
+            haveChallenge = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
+                SYNC_KEY, sizeof(SYNC_KEY), input, sizeof(input), proof + 17) == 0;
+            if (haveChallenge) statusCharacteristic->setValue(proof, sizeof(proof));
+            else statusCharacteristic->setValue("ERR:auth");
+        } else if (bytes[0] == 'B' && n == 3 && haveChallenge) {
             received = 0;
             receiveStarted = millis();
             expected = bytes[1] | (size_t(bytes[2]) << 8);
-            if (expected <= 32 || expected > MAX_PACKET) {
+            if (expected <= 28 || expected > MAX_PACKET) {
                 expected = 0;
                 statusCharacteristic->setValue("ERR:length");
             } else statusCharacteristic->setValue("RX");
@@ -124,19 +144,28 @@ class WriteCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
-bool acceptPacket(const uint8_t *packet, size_t length, uint32_t transferSeconds) {
-    if (length <= 32 || length > MAX_PACKET) return false;
-    size_t bodyLength = length - 32;
-    uint8_t digest[32];
+bool acceptPacket(const uint8_t *packet, size_t length, uint32_t transferSeconds,
+                  const uint8_t *challenge) {
+    if (length <= 28 || length > MAX_PACKET) return false;
+    const size_t bodyLength = length - 28;
+    uint8_t encryptionKey[32], plaintext[MAX_PACKET];
+    uint8_t aad[sizeof(PAYLOAD_DOMAIN) - 1 + 32];
+    memcpy(aad, PAYLOAD_DOMAIN, sizeof(PAYLOAD_DOMAIN) - 1);
+    memcpy(aad + sizeof(PAYLOAD_DOMAIN) - 1, challenge, 32);
     if (mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),
-                        SYNC_KEY, sizeof(SYNC_KEY), packet, bodyLength, digest)) return false;
-    uint8_t different = 0;
-    for (int i = 0; i < 32; ++i) different |= digest[i] ^ packet[bodyLength + i];
-    if (different) return false;
+        SYNC_KEY, sizeof(SYNC_KEY), reinterpret_cast<const uint8_t *>(KEY_DOMAIN),
+        sizeof(KEY_DOMAIN) - 1, encryptionKey)) return false;
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    int result = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, encryptionKey, 256);
+    if (!result) result = mbedtls_gcm_auth_decrypt(&gcm, bodyLength, packet, 12,
+        aad, sizeof(aad), packet + length - 16, 16, packet + 12, plaintext);
+    mbedtls_gcm_free(&gcm);
+    if (result) return false;
     // Const input forces owned strings. ArduinoJson 6.21.x is the tested API target.
     DynamicJsonDocument doc(4096);
-    if (deserializeJson(doc, reinterpret_cast<const char *>(packet), bodyLength)) return false;
-    if (doc["v"] != 1 || !doc["id"].is<const char *>()) return false;
+    if (deserializeJson(doc, reinterpret_cast<const char *>(plaintext), bodyLength)) return false;
+    if (doc["v"] != 2 || !doc["id"].is<const char *>()) return false;
     const char *id = doc["id"];
     if (strlen(id) != 8) return false;
     for (int i = 0; i < 8; ++i) if (!isxdigit(id[i])) return false;
@@ -161,19 +190,22 @@ bool acceptPacket(const uint8_t *packet, size_t length, uint32_t transferSeconds
         JsonArray row = value.as<JsonArray>();
         if (row.size() != 2 || !row[0].is<uint32_t>() || !row[1].is<int32_t>()) return false;
         uint32_t at = row[0]; int32_t offset = row[1];
-        if (offset < -50400 || offset > 50400 || at < next.synced || at > next.morning ||
+        if (offset < -50400 || offset > 50400 || at > next.morning ||
             (next.zoneCount && at <= next.zones[next.zoneCount - 1].at)) return false;
         next.zones[next.zoneCount++] = {at, offset};
     }
-    if (next.zones[0].at != next.synced) return false;
+    if (next.zones[0].at > next.day) return false;
     for (JsonVariant value : events) {
         if (!value.is<JsonArray>()) return false;
         JsonArray row = value.as<JsonArray>();
         if (row.size() != 5 || !row[0].is<uint32_t>() || !row[1].is<uint32_t>() ||
             !row[2].is<const char *>() || !row[3].is<const char *>() || !row[4].is<int>()) return false;
         Event e = {};
-        e.start = row[0]; e.end = row[1]; e.status = row[4];
-        if (e.start >= e.end || e.end <= next.synced || e.start >= next.end ||
+        e.start = row[0]; e.end = row[1];
+        int status = row[4];
+        if (status != 2 && status != 3) return false;
+        e.status = status;
+        if (e.start >= e.end || e.end <= next.synced || e.start >= next.end || next.zones[0].at > e.start ||
             (e.status != 2 && e.status != 3) || strlen(row[2]) > 32 || strlen(row[3]) > 20 ||
             (next.count && e.start < next.events[next.count - 1].start)) return false;
         strlcpy(e.subject, row[2], sizeof(e.subject));
@@ -267,18 +299,19 @@ bool syncWindow(uint32_t duration, bool showPrompt) {
     bool accepted = false;
     while (millis() - opened < duration || (accepted && millis() - acceptedAt < 15000)) {
         if (!accepted) {
-            uint8_t packet[MAX_PACKET]; size_t length = 0; uint32_t transferSeconds = 0;
+            uint8_t packet[MAX_PACKET], challenge[32]; size_t length = 0; uint32_t transferSeconds = 0;
             xSemaphoreTake(rxMutex, portMAX_DELAY);
             if (committed) {
                 length = received; memcpy(packet, receiveBuffer, length);
+                memcpy(challenge, authNonce, sizeof(challenge));
                 transferSeconds = (millis() - receiveStarted) / 1000;
             }
             xSemaphoreGive(rxMutex);
             if (length) {
-                accepted = acceptPacket(packet, length, transferSeconds);
+                accepted = acceptPacket(packet, length, transferSeconds, challenge);
                 statusCharacteristic->setValue(accepted ? ("OK:" + String(calendar.id)).c_str() : "ERR:payload");
                 xSemaphoreTake(rxMutex, portMAX_DELAY);
-                committed = false; received = expected = 0;
+                committed = false; received = expected = 0; haveChallenge = false;
                 xSemaphoreGive(rxMutex);
                 if (accepted) acceptedAt = millis();
             }
