@@ -101,6 +101,8 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
                 continue;
             }
             block.title = e.subject;
+            block.time = hhmm(e.start) + " - " + hhmm(e.end);
+            block.past = e.end <= now;
             block.tentative = e.response == 2 || e.status == 1 || e.response == 5;
             block.detail = e.response == 5 ? "Awaiting RSVP" : block.tentative ? "Tentative" :
                 e.response == 3 ? "Accepted" : e.response == 1 ? "Organizer" : "Appointment";

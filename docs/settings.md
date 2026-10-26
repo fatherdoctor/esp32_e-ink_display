@@ -95,12 +95,18 @@ unknown. Bodies and join URLs are never transmitted. Privacy redaction hides
 titles, locations and venue unless `client.show_private` or `--show-private` is set.
 
 `timeline_start_hour`, `timeline_end_hour` and `use_24_hour_time` control the
-viewport and clock labels. Out-of-range events still affect availability and
-are counted beneath the timeline. Short or crowded overlaps may show only a
-marker/title. The physical panel remains monochrome; previews use desktop fonts.
+agenda's included hours and clock labels. The option names are retained for
+compatibility. Each day shows the first three ongoing/upcoming meetings in tall,
+chronological cards with explicit times. Finished events, further upcoming
+meetings and entries outside the selected hours have count labels. All cached
+meetings still affect availability, including cards that do not fit on screen.
+Location and subject text wrap, and overlong text uses a visible ellipsis rather
+than crossing a border. Next up and the extra availability caption were removed
+to prioritize a large status block, location and next-available time.
+
 Meetings whose local end label precedes their start during a repeated DST hour
-appear as a `Clock change` entry above the grid; UTC-based availability remains
-correct. The fixed wall-clock grid does not expand to draw the repeated hour twice.
+appear as a `Clock change` entry in the day header; UTC-based availability remains
+correct. The physical panel remains monochrome; previews use desktop fonts.
 
 ## Other timers and bounds
 

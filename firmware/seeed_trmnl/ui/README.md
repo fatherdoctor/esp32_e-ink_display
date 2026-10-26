@@ -11,16 +11,24 @@ here independently of the data source, BLE transport, panel refresh and sleep.
 | Main sketch | Validate incoming data, choose a page, measure battery, refresh and sleep |
 | Windows client | Read Outlook and send semantic data, with no knowledge of UI coordinates |
 
-The calendar page follows a date/status sidebar with today/tomorrow timelines.
-The sidebar carries current status, room/location, next availability and next
-meeting. Unknown time is hatched rather than represented as a free slot.
-Overlapping appointments use separate lanes. Rounded day cards, sentence-case
-status pills and a sparse time grid keep the monochrome layout readable. RSVP
-and venue labels distinguish accepted/tentative/unanswered meetings and
-Teams/physical/hybrid locations; all-day reminders appear above the grid. The timeline defaults to
-8 AM to 6 PM and is configurable; out-of-range appointments are counted below each column and still
-participate in the current-status and next-availability calculations. Short
-appointments may fit only a marker or shortened title at this scale.
+The calendar page uses a large date/status sidebar and two day-agenda columns.
+The status block is 120 pixels tall with up to two lines of 24pt bold text.
+Location and subject wrap independently below it, followed by next availability.
+The old Next up row and extra availability caption were removed to make room.
+
+Each day shows up to three ongoing/upcoming meetings in 94-pixel cards, with an
+explicit time range, up to two title lines, and a separate RSVP/venue line.
+Cards are chronological rather than proportional to duration, so short meetings
+have the same readable height as long ones. Overlapping meetings keep their own
+cards and real time labels. Finished entries are counted as earlier, and extra
+upcoming entries are counted as more. Omitted cards stay in the cache and still
+participate in availability calculations. All-day reminders have a two-line
+header area; incomplete coverage is explicitly labeled as a partial schedule.
+
+The existing timeline_start_hour/end_hour settings now filter the agenda's hours
+(default 8 AM to 6 PM). Events crossing the range remain visible with their real
+times; entries wholly outside it are counted below. Word wrapping uses measured
+font bounds, with an explicit ellipsis for text exceeding its allotted lines.
 
 The six-card dashboard renderer is compiled and ready for a future data adapter.
 It is read-only: the current firmware does not accept HA dashboard messages,

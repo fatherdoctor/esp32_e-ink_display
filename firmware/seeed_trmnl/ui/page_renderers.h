@@ -16,13 +16,13 @@ void text(Canvas &c, int x, int top, String value, const GFXfont *font,
     int16_t bx, by; uint16_t w, h;
     c.getTextBounds(value, 0, 0, &bx, &by, &w, &h);
     bool shortened = false;
-    while (maxWidth && w > maxWidth && value.length()) {
+    while (maxWidth > 0 && w > maxWidth && value.length()) {
         value.remove(value.length() - 1); shortened = true;
-        c.getTextBounds(value + "~", 0, 0, &bx, &by, &w, &h);
+        c.getTextBounds(value + "...", 0, 0, &bx, &by, &w, &h);
     }
     if (shortened) {
         if (maxWidth < 16) return;
-        value += "~";
+        value += "...";
     }
     c.getTextBounds(value, 0, 0, &bx, &by, &w, &h);
     c.setCursor(x - bx, top - by); c.print(value);
@@ -31,91 +31,94 @@ template<class Canvas>
 void small(Canvas &c, int x, int top, const String &value, uint16_t ink = Black) {
     text(c, x, top, value, nullptr, ink);
 }
+
+// Fit whole words into a bounded number of lines. Long final lines use an
+// explicit ellipsis; no glyphs are drawn across the containing card's border.
+template<class Canvas>
+void wrapped(Canvas &c, int x, int top, String value, const GFXfont *font,
+             int width, int lines, int lineHeight, uint16_t ink = Black) {
+    value.trim();
+    for (int row = 0; row < lines && value.length(); ++row) {
+        if (row == lines - 1) { text(c, x, top + row*lineHeight, value, font, ink, width); break; }
+        c.setFont(font); c.setTextSize(1);
+        int16_t bx, by; uint16_t w, h;
+        int fit = 0, space = -1;
+        for (unsigned end = 1; end <= value.length(); ++end) {
+            c.getTextBounds(value.substring(0, end), 0, 0, &bx, &by, &w, &h);
+            if (w > width) break;
+            fit = end;
+            if (value[end-1] == ' ') space = end-1;
+        }
+        if (fit == int(value.length())) { text(c, x, top + row*lineHeight, value, font, ink, width); break; }
+        int cut = space > 0 ? space : max(1, fit);
+        text(c, x, top + row*lineHeight, value.substring(0, cut), font, ink, width);
+        value = value.substring(cut); value.trim();
+    }
+}
 template<class Canvas>
 void drawCalendarPage(Canvas &c, const CalendarPage &m) {
     c.fillScreen(White);
-    text(c, 22, 16, m.weekday, &FreeSansBold12pt7b, Black, 260);
-    text(c, 20, 48, m.day, &FreeSansBold24pt7b, Black, 115, 2);
-    text(c, 133, 78, m.monthYear, &FreeSans9pt7b, Black, 155);
+    text(c, 20, 22, m.day, &FreeSansBold24pt7b, Black, 116, 2);
+    text(c, 144, 22, m.weekday, &FreeSansBold12pt7b, Black, 154);
+    text(c, 144, 60, m.monthYear, &FreeSans9pt7b, Black, 154);
     String status;
     switch (m.status) {
-        case Availability::Available: status = "Available"; break;
+        case Availability::Available: case Availability::Done: status = "Available"; break;
         case Availability::Meeting: status = "In a meeting"; break;
         case Availability::OutOfOffice: status = "Out of office"; break;
-        case Availability::Done: status = "Available / done today"; break;
         default: status = "Sync needed"; break;
     }
     bool busy = m.status == Availability::Meeting || m.status == Availability::OutOfOffice;
     if (m.statusLabel.length()) status = m.statusLabel;
-    c.fillRoundRect(20, 151, 265, 38, 18, busy ? Black : White);
-    c.drawRoundRect(20, 151, 265, 38, 18, Black);
-    text(c, 34, 162, status, &FreeSansBold9pt7b, busy ? White : Black, 236);
-    text(c, 22, 214, m.location, &FreeSansBold12pt7b, Black, 264);
-    text(c, 22, 251, m.subject, &FreeSans9pt7b, Black, 264);
-    small(c, 23, 309, "Next available");
-    text(c, 21, 331, m.nextAvailable, &FreeSansBold24pt7b, Black, 265);
-    text(c, 22, 378, m.availabilityDetail, &FreeSans9pt7b, Black, 265);
-    small(c, 22, 419, "Next up");
-    small(c, 22, 436, m.nextUp.substring(0, 44));
-    const int top = 99, bottom = 426, span = bottom - top;
-    const int firstMinute = m.startHour * 60, lastMinute = m.endHour * 60;
-    const int minutes = lastMinute - firstMinute;
+    c.fillRoundRect(18, 120, 280, 120, 16, busy ? Black : White);
+    c.drawRoundRect(18, 120, 280, 120, 16, Black);
+    c.setFont(&FreeSansBold24pt7b); c.setTextSize(1);
+    int16_t sx, sy; uint16_t sw, sh;
+    c.getTextBounds(status, 0, 0, &sx, &sy, &sw, &sh);
+    int statusTop = sw <= 248 ? 120 + (120-sh)/2 : 135;
+    wrapped(c, 34, statusTop, status, &FreeSansBold24pt7b, 248, 2, 52, busy ? White : Black);
+    wrapped(c, 22, 258, m.location, &FreeSansBold12pt7b, 274, 2, 28);
+    wrapped(c, 22, 324, m.subject, &FreeSans9pt7b, 274, 2, 22);
+    String nextCaption = "Next available";
+    if (m.nextAvailable == "Tomorrow") nextCaption += " / " + m.availabilityDetail;
+    text(c, 22, 383, nextCaption, &FreeSans9pt7b, Black, 277);
+    text(c, 21, 411, m.nextAvailable, &FreeSansBold24pt7b, Black, 277);
     for (int col = 0; col < 2; ++col) {
         const DayColumn &d = m.columns[col];
-        int left = 344 + col * 224;
-        c.drawRoundRect(left - 6, 12, 218, 435, 12, Black);
-        text(c, left + 7, 28, d.label, &FreeSansBold12pt7b, Black, 192);
-        small(c, left + 8, 58, d.date);
-        small(c, left + 8, 78, d.allDay.substring(0, 31));
-        for (int hour = m.startHour; hour <= m.endHour; hour += 2) {
-            int y = top + (hour * 60 - firstMinute) * span / minutes;
-            for (int x = left + 1; x < left + 205; x += 5) c.drawPixel(x, y, Black);
-            if (col == 0) small(c, 311, y - 3, String(m.clock24 ? hour : (hour % 12 ? hour % 12 : 12)));
-        }
-        int knownMinute = d.covered ? d.coverageMinute : firstMinute;
-        int unknownY = constrain(top + (knownMinute - firstMinute) * span / minutes, top, bottom);
-        for (int y = unknownY; y < bottom; y += 8)
-            for (int x = left; x < left + 206; x += 8) c.drawPixel(x, y, Black);
+        int left = 316 + col * 238;
+        c.drawRoundRect(left, 12, 230, 438, 12, Black);
+        text(c, left+13, 27, d.label, &FreeSansBold12pt7b, Black, 204);
+        text(c, left+13, 62, d.date, &FreeSans9pt7b, Black, 204);
+        wrapped(c, left+13, 89, d.allDay, nullptr, 204, 2, 12);
         if (!d.covered) {
-            c.fillRoundRect(left + 10, 230, 185, 28, 8, White);
-            text(c, left + 23, 236, "Sync needed", &FreeSans9pt7b);
+            wrapped(c, left+13, 156, "Sync needed", &FreeSansBold12pt7b, 204, 2, 28);
             continue;
         }
-        int i = 0, outside = 0;
-        while (i < d.count) {
-            int groupEnd = d.events[i].endMinute, end = i + 1;
-            while (end < d.count && d.events[end].startMinute < groupEnd) {
-                groupEnd = max(groupEnd, d.events[end].endMinute); ++end;
-            }
-            int laneEnds[48] = {}, lanes[48] = {}, laneCount = 0;
-            for (int j = i; j < end; ++j) {
-                int lane = 0;
-                while (lane < laneCount && laneEnds[lane] > d.events[j].startMinute) ++lane;
-                if (lane == laneCount) ++laneCount;
-                lanes[j-i] = lane; laneEnds[lane] = d.events[j].endMinute;
-            }
-            for (int j = i; j < end; ++j) {
-                const TimelineEvent &e = d.events[j];
-                if (e.startMinute < firstMinute || e.endMinute > lastMinute) ++outside;
-                int a = max(firstMinute, e.startMinute), b = min(lastMinute, e.endMinute);
-                if (a >= b) continue;
-                int width = 206 / laneCount, x = left + lanes[j-i] * width;
-                int y = top + (a-firstMinute) * span / minutes;
-                int h = max(3, (b-a) * span / minutes - 2);
-                uint16_t ink = e.active ? White : Black;
-                int radius = min(6, min(h/2, (width-2)/2));
-                c.fillRoundRect(x, y, width-2, h, radius, e.active ? Black : White);
-                c.drawRoundRect(x, y, width-2, h, radius, Black);
-                if (e.tentative) for (int yy=y+3; yy<y+h-2; yy+=4) c.drawFastVLine(x+2, yy, 2, ink);
-                if (h >= 21) text(c, x+6, y+4, e.title, &FreeSansBold9pt7b, ink, width-15);
-                else if (h >= 11) small(c, x+3, y+2, e.title.substring(0, max(1,(width-9)/6)), ink);
-                if (h >= 32) small(c, x+6, y+22, e.detail.substring(0, max(1,(width-15)/6)), ink);
-            }
-            i = end;
+        if (d.coverageMinute < 1440) small(c, left+13, 116, "Partial schedule: sync for more");
+        int shown = 0, more = 0, outside = 0, earlier = 0;
+        for (int i = 0; i < d.count; ++i) {
+            const TimelineEvent &e = d.events[i];
+            if (e.past) { ++earlier; continue; }
+            if (e.endMinute <= m.startHour*60 || e.startMinute >= m.endHour*60) { ++outside; continue; }
+            if (shown >= 3) { ++more; continue; }
+            int x = left+8, y = 132 + shown++ * 102;
+            uint16_t ink = e.active ? White : Black;
+            c.fillRoundRect(x, y, 214, 94, 9, e.active ? Black : White);
+            c.drawRoundRect(x, y, 214, 94, 9, Black);
+            text(c, x+10, y+10, e.time, &FreeSans9pt7b, ink, 194);
+            wrapped(c, x+10, y+34, e.title, &FreeSansBold9pt7b, 194, 2, 21, ink);
+            text(c, x+10, y+78, e.detail, nullptr, ink, 194);
         }
-        if (outside) small(c, left+6, 434, String(outside) + " outside visible hours");
+        if (!shown) wrapped(c, left+13, 156, d.coverageMinute < 1440 ? "Later schedule unknown" :
+                             outside ? "No meetings in these hours" : "No upcoming meetings",
+                             &FreeSans9pt7b, 204, 3, 24);
+        String summary;
+        if (more) summary += "+" + String(more) + " more  ";
+        if (outside) summary += String(outside) + " outside hours";
+        if (!more && !outside && earlier) summary = String(earlier) + " earlier";
+        text(c, left+13, 438, summary, nullptr, Black, 204);
     }
-    small(c, 22, 465, m.footer.substring(0, 125));
+    text(c, 22, 465, m.footer, nullptr, Black, 756);
     c.setFont(nullptr);
 }
 

@@ -9,7 +9,7 @@ Wi-Fi. It is not the older XIAO ESP32-C3 panel or the retail TRMNL OG.
 Compiled successfully on Windows on 2026-10-26 with PlatformIO 6.1.18,
 espressif32 6.12.0, Arduino-ESP32 2.0.17, GxEPD2 1.6.5, Adafruit GFX 1.12.1,
 Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The latest local configurable two-day UI build uses
-105,340 bytes of static RAM and 987,977 bytes of flash. Hardware behavior is not yet validated.
+about 105 KB of static RAM and 989 KB of flash. Hardware behavior is not yet validated.
 
 The PlatformIO XIAO S3 profile is overridden for the PLUS's 16 MB flash and 8 MB
 OPI PSRAM. Its opening summary still names the base 8 MB board; the generated
@@ -65,8 +65,9 @@ multimeter if necessary; voltage is not treated as a charge percentage.
 ## Behavior
 
 - A date header and large availability/location details occupy the left sidebar.
-- The right side shows today and tomorrow as calendar timelines; current meetings
-  use solid black blocks, overlaps use lanes, and unknown time is hatched.
+- The right side shows today and tomorrow as tall agenda cards, with three upcoming
+  entries per day, explicit times and counts for additional/finished entries.
+  Current meetings use solid black cards; partial schedules are labeled.
 - Each day carries up to 24 entries and its own knowledge cutoff. At midnight,
   cached tomorrow becomes today. The next, uncached day is marked unknown.
 - Page models/renderers are separate modules; a dashboard-card renderer is also
@@ -107,7 +108,7 @@ pairing. Use the displayed PIN. Once synthetic events work, press KEY1 and run
 
 ## Hardware acceptance checks
 
-1. Confirm the sidebar and both timeline columns render with synthetic data.
+1. Confirm the sidebar and both day columns render with synthetic data.
 2. Pair on Windows, accept a packet, and reconnect after timer and button wakes.
 3. Check status at start/end boundaries, overlaps, midnight, and the configured event-limit
    horizon. A canceled meeting needs another sync before the display knows it.

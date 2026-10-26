@@ -7,9 +7,10 @@ enum class Availability { Unknown, Available, Meeting, OutOfOffice, Done };
 struct TimelineEvent {
     int startMinute = 0, endMinute = 0;
     String title;
-    String detail;
+    String detail, time;
     bool tentative = false;
     bool active = false;
+    bool past = false;
 };
 struct DayColumn {
     String label, date, allDay;
