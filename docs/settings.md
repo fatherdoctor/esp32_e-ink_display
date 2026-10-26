@@ -98,6 +98,9 @@ titles, locations and venue unless `client.show_private` or `--show-private` is 
 viewport and clock labels. Out-of-range events still affect availability and
 are counted beneath the timeline. Short or crowded overlaps may show only a
 marker/title. The physical panel remains monochrome; previews use desktop fonts.
+Meetings whose local end label precedes their start during a repeated DST hour
+appear as a `Clock change` entry above the grid; UTC-based availability remains
+correct. The fixed wall-clock grid does not expand to draw the repeated hour twice.
 
 ## Other timers and bounds
 

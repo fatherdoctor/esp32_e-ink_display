@@ -9,7 +9,7 @@ Wi-Fi. It is not the older XIAO ESP32-C3 panel or the retail TRMNL OG.
 Compiled successfully on Windows on 2026-10-26 with PlatformIO 6.1.18,
 espressif32 6.12.0, Arduino-ESP32 2.0.17, GxEPD2 1.6.5, Adafruit GFX 1.12.1,
 Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The latest local configurable two-day UI build uses
-105,340 bytes of static RAM and 987,661 bytes of flash. Hardware behavior is not yet validated.
+105,340 bytes of static RAM and 987,977 bytes of flash. Hardware behavior is not yet validated.
 
 The PlatformIO XIAO S3 profile is overridden for the PLUS's 16 MB flash and 8 MB
 OPI PSRAM. Its opening summary still names the base 8 MB board; the generated

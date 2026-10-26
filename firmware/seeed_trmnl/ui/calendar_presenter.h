@@ -1,5 +1,6 @@
 #pragma once
 #include "page_models.h"
+#include "timeline_math.h"
 
 // This presenter translates the semantic calendar into a page model. It does
 // not draw, refresh, sleep, connect to BLE, or know where the data came from.
@@ -12,9 +13,7 @@ inline String dateText(uint32_t epoch, const char *format) {
     return String(buffer);
 }
 inline int minuteOfDay(uint32_t epoch) {
-    time_t value = time_t(epoch) + utcOffset(epoch);
-    struct tm local; gmtime_r(&value, &local);
-    return local.tm_hour * 60 + local.tm_min;
+    return wallMinute(epoch, utcOffset(epoch));
 }
 inline CalendarPage presentCalendar(uint32_t now, float voltage) {
     CalendarPage m;
@@ -95,6 +94,12 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
             TimelineEvent &block = d.events[d.count++];
             block.startMinute = e.start <= from ? 0 : minuteOfDay(e.start);
             block.endMinute = e.end >= to ? 1440 : minuteOfDay(e.end);
+            if (needsClockChangeMarker(block.startMinute, block.endMinute)) {
+                d.allDay = String("Clock change: ") + e.subject +
+                    (d.allDay.length() ? " / " + d.allDay : "");
+                --d.count;
+                continue;
+            }
             block.title = e.subject;
             block.tentative = e.response == 2 || e.status == 1 || e.response == 5;
             block.detail = e.response == 5 ? "Awaiting RSVP" : block.tentative ? "Tentative" :
