@@ -7,6 +7,8 @@ enum class Availability { Unknown, Available, Meeting, OutOfOffice, Done };
 struct TimelineEvent {
     int startMinute = 0, endMinute = 0;
     String title;
+    String detail;
+    bool tentative = false;
     bool active = false;
 };
 struct DayColumn {
@@ -14,13 +16,15 @@ struct DayColumn {
     bool covered = false;
     int coverageMinute = 1440;
     int count = 0;
-    TimelineEvent events[12];
+    TimelineEvent events[48];
 };
 struct CalendarPage {
     Availability status = Availability::Unknown;
-    String day, weekday, monthYear, subject, location;
+    String day, weekday, monthYear, subject, location, statusLabel;
     String nextAvailable, availabilityDetail, nextUp, footer;
     DayColumn columns[2];
+    int startHour = 8, endHour = 18;
+    bool clock24 = false;
 };
 struct DashboardCard { String title, value, detail; };
 struct DashboardPage {

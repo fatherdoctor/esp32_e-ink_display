@@ -3,6 +3,7 @@ from pathlib import Path
 import argparse
 import json
 import secrets
+from display_settings import default_config
 
 
 def main():
@@ -18,7 +19,8 @@ def main():
     key = secrets.token_bytes(32)
     pin = secrets.randbelow(900000) + 100000
     header.parent.mkdir(parents=True, exist_ok=True)
-    config.write_text(json.dumps({"key": key.hex()}, indent=2) + "\n", encoding="utf-8")
+    values = {'key': key.hex(), **default_config()}
+    config.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
     header.write_text("#pragma once\n#include <stdint.h>\n"
                       + "static const uint8_t SYNC_KEY[32] = {"
                       + ",".join(str(b) for b in key) + "};\n"

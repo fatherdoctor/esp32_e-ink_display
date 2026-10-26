@@ -18,6 +18,8 @@ inline int minuteOfDay(uint32_t epoch) {
 }
 inline CalendarPage presentCalendar(uint32_t now, float voltage) {
     CalendarPage m;
+    m.startHour = settings.timeline_start_hour; m.endHour = settings.timeline_end_hour;
+    m.clock24 = settings.use_24_hour_time;
     bool valid = currentDay(now), known = valid && now < knowledgeUntil(now);
     if (validClock(now)) {
         m.day = dateText(now, "%d"); m.weekday = dateText(now, "%A");
@@ -28,24 +30,32 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
     int active = -1, next = -1;
     for (int i = 0; i < calendar.count; ++i) {
         const Event &e = calendar.events[i];
-        if (e.start <= now && e.end > now) {
+        if (blocksAvailability(e) && e.start <= now && e.end > now) {
             if (active < 0 || e.status == 3) active = i;
             busyEnd = max(busyEnd, e.end);
         }
-        if (e.start > now && e.start < todayEnd) nextStart = min(nextStart, e.start);
+        if (blocksAvailability(e) && e.start > now && e.start < todayEnd) nextStart = min(nextStart, e.start);
         if (e.start > now && (next < 0 || e.start < calendar.events[next].start)) next = i;
     }
-    if (active >= 0) for (int pass = 0; pass < 12; ++pass)
+    if (active >= 0) for (int pass = 0; pass < 48; ++pass)
         for (int i = 0; i < calendar.count; ++i)
-            if (calendar.events[i].start <= busyEnd && calendar.events[i].end > busyEnd)
+            if (blocksAvailability(calendar.events[i]) && calendar.events[i].start <= busyEnd && calendar.events[i].end > busyEnd)
                 busyEnd = calendar.events[i].end;
     if (!known) {
-        m.status = Availability::Unknown; m.location = "Press KEY1 to sync";
+        m.status = Availability::Unknown;
+        m.location = settings.button_enabled ? "Press KEY1 to sync" :
+            settings.nfc_enabled ? "Tap NFC to sync" : "Reset panel to sync";
         m.subject = "Incomplete or stale schedule"; m.nextAvailable = "Unknown";
     } else if (active >= 0) {
         const Event &e = calendar.events[active];
         m.status = e.status == 3 ? Availability::OutOfOffice : Availability::Meeting;
+        if (e.status == 4) m.statusLabel = "Working elsewhere";
+        else if (e.response == 5) m.statusLabel = "Awaiting response";
+        else if (e.response == 2 || e.status == 1) m.statusLabel = "Tentative meeting";
         m.location = strlen(e.location) ? String(e.location) : "Location not provided";
+        if (e.status == 3 && !strlen(e.location)) m.location = "Away from the desk";
+        if (e.venue == 1) m.location = "Microsoft Teams";
+        if (e.venue == 3) m.location += " / Teams";
         m.subject = e.subject;
         uint32_t horizon = knowledgeUntil(now);
         if (now < calendar.end && calendar.until == calendar.end) horizon = calendar.tomorrowUntil;
@@ -67,7 +77,7 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
         DayColumn &d = m.columns[col];
         uint32_t from = col == 0 ? (now < calendar.end ? calendar.day : calendar.end) : todayEnd;
         uint32_t to = col == 0 ? todayEnd : calendar.tomorrowEnd;
-        d.label = col == 0 ? "TODAY" : "TOMORROW";
+        d.label = col == 0 ? "Today" : "Tomorrow";
         d.covered = valid && (col == 0 || now < calendar.end) && to > from;
         d.date = d.covered || valid ? dateText(from, "%a, %b %d") : "Awaiting sync";
         uint32_t horizon = col == 0 ? knowledgeUntil(now) : calendar.tomorrowUntil;
@@ -76,17 +86,27 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
         for (int i = 0; i < calendar.count; ++i) {
             const Event &e = calendar.events[i];
             if (e.end <= from || e.start >= to) continue;
-            if (e.start <= from && e.end >= to) { d.allDay = String("ALL DAY: ") + e.subject; continue; }
-            if (d.count >= 12) break;
+            if (e.allDay || (e.start <= from && e.end >= to)) {
+                if (d.allDay.length()) d.allDay += " / ";
+                d.allDay += String(e.status == 0 ? "Reminder: " : "All day: ") + e.subject;
+                continue;
+            }
+            if (d.count >= 48) break;
             TimelineEvent &block = d.events[d.count++];
             block.startMinute = e.start <= from ? 0 : minuteOfDay(e.start);
             block.endMinute = e.end >= to ? 1440 : minuteOfDay(e.end);
             block.title = e.subject;
-            block.active = e.start <= now && e.end > now;
+            block.tentative = e.response == 2 || e.status == 1 || e.response == 5;
+            block.detail = e.response == 5 ? "Awaiting RSVP" : block.tentative ? "Tentative" :
+                e.response == 3 ? "Accepted" : e.response == 1 ? "Organizer" : "Appointment";
+            block.detail += e.venue == 1 ? " / Teams" : e.venue == 3 ? " / Hybrid" :
+                e.venue == 2 ? " / In person" : "";
+            block.active = blocksAvailability(e) && e.start <= now && e.end > now;
         }
     }
     m.footer = retained() ? "Synced " + dateText(calendar.synced, "%a ") + hhmm(calendar.synced) : "Not synchronized";
-    m.footer += "    KEY1: Sync";
+    if (settings.button_enabled) m.footer += "    KEY1: Sync";
+    if (settings.nfc_enabled) m.footer += "    NFC: Sync";
     if (voltage > 2.5f && voltage < 4.6f) m.footer += "    Battery " + String(voltage, 2) + "V";
     return m;
 }

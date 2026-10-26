@@ -1,4 +1,4 @@
-# Encrypted display transport v2 and calendar schema v3
+# Encrypted display transport v2 and calendar schema v4
 
 Service `79dc1000-48c5-4b86-b403-184557b01e14` exposes:
 
@@ -38,7 +38,7 @@ Use AES-256-GCM with a fresh random 12-byte nonce and additional authenticated d
 
 `aes_nonce[12] || ciphertext || gcm_tag[16]`
 
-The 2048-byte maximum includes this 28-byte overhead. The plaintext is compact
+The 4096-byte maximum includes this 28-byte overhead. The plaintext is compact
 ASCII JSON. Encryption keeps calendar details private even if a malicious peer
 relays the live proof. The fresh device nonce prevents replaying a captured
 packet into a new session after reset. Never reuse an AES nonce with the same key.
@@ -58,20 +58,24 @@ ATT write responses do not establish application acceptance.
 
 | Field | Meaning |
 | --- | --- |
-| `v` | Integer 3 for two-day calendar data; receivers also accept legacy one-day 2 |
-| `kind` | `calendar` for schema 3; other kinds are currently rejected |
+| `v` | Integer 4; Seeed also accepts calendar v2/v3 |
+| `kind` | `calendar` or `settings` for schema 4 |
 | `id` | Eight hexadecimal transaction-ID characters |
 | `now` | Current UTC epoch seconds, taken after pairing and extraction |
 | `day`, `end` | UTC epochs of local midnight today and tomorrow; end is exclusive |
-| `morning` | UTC epoch of tomorrow's local 07:00 |
+| `morning` | UTC epoch of tomorrow's configured local morning time |
 | `until` | Exclusive schedule knowledge horizon, no later than `end` |
 | `tomorrow_end` | UTC epoch of local midnight after tomorrow, computed independently |
 | `tomorrow_until` | Tomorrow's exclusive knowledge horizon, between `end` and `tomorrow_end` |
 | `tz` | 1-4 `[effective_utc_epoch, offset_seconds]` rows |
-| `events` | 0-12 `[start_utc, end_utc, subject, location, status]` rows; at most six per day |
+| `events` | 0-48 `[start_utc, end_utc, subject, location, busy, response, venue, all_day]` rows; at most 24 per day |
+| `cfg` | Complete compact device options, keyed by `DEVICE_SPECS` in `display_settings.py` |
 
 Event start is inclusive and end exclusive. Rows are sorted by start then end.
-Status 2 is busy and 3 out of office. Subjects/locations are printable ASCII,
+Busy values: 0 free, 1 tentative, 2 busy, 3 out of office, 4 working elsewhere.
+Response values: 0 appointment, 1 organizer, 2 tentative, 3 accepted, 5 unanswered;
+declined response 4 is excluded. Venue: 0 unspecified, 1 Teams, 2 physical, 3 hybrid.
+`all_day` is integer 0 or 1. Availability policy is separate from RSVP/venue. Subjects/locations are printable ASCII,
 at most 32/20 characters; escaping may shorten text further to fit the limit.
 All timestamps are UTC POSIX epochs. Overnight entries are transmitted once and
 can appear in both day columns. The two daily knowledge horizons are independent.
@@ -99,3 +103,19 @@ Rejected packets do not replace the retained calendar.
 Retained timestamps also reject older accepted schedules and the last ID.
 Those checks clear on power loss; session encryption stays fresh because the
 device generates a new nonce. Key rotation/re-pairing remain manual provisioning.
+
+## Settings messages and compatibility
+
+A schema v4 `kind: "settings"` message contains only `v`, `kind`, `id`, `now`,
+`morning`, and complete `cfg`. It uses the same identity proof and encrypted
+transport, never opens Outlook, adjusts the clock and future wake times, and
+keeps the existing calendar. Successful acknowledgment means settings were
+validated and persisted (or already matched). Normal calendar v4 messages also
+carry settings. Bounds are checked on both ends; unknown/incomplete `cfg` objects
+are rejected. Older calendar messages without `cfg` keep current settings.
+
+Seeed accepts v2 five-field rows (up to six) and v3 five-field rows (up to 12)
+for compatibility. The historical Inkplate sketch only accepts v2/v3 and a
+2048-byte maximum; it needs the matching client from commit `2bd85e4` and does
+not implement runtime settings or NFC. Do not use the current v4 client with
+that sketch. No variant accepts plaintext messages.

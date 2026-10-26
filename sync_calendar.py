@@ -13,6 +13,10 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
 import secrets
+import re
+from urllib.parse import unquote
+from html import unescape
+from display_settings import client_options, device_options, wire_options
 
 # Keep Bleak's main thread MTA; Outlook COM lives in its own STA worker.
 sys.coinit_flags = 0
@@ -45,7 +49,16 @@ def outlook_date(epoch: int, locale_name: str | None = None) -> str:
     return date_buffer.value + ' ' + time_buffer.value
 
 
-def read_outlook(now: datetime) -> list[Event]:
+def meeting_venue(location: str, body: str = '') -> int:
+    """Classify locally; never transmit the meeting body or join URL."""
+    text = unquote(unescape((location or '') + '\n' + (body or '')[:131072]))
+    teams = bool(re.search(r'https://(?:teams\.microsoft\.com|teams\.cloud\.microsoft|teams\.live\.com)/(?:l/meetup-join/|meet/)', text, re.I))
+    teams = teams or bool(re.search(r'\b(?:microsoft\s+teams|teams\s+meeting)\b', location or '', re.I))
+    room = re.sub(r'https?://\S+|\b(?:microsoft\s+teams(?:\s+meeting)?|teams\s+meeting|teams|online|virtual)\b', '', location or '', flags=re.I).strip(' ;,|\n\t')
+    return (3 if room else 1) if teams else (2 if room else 0)
+
+
+def read_outlook(now: datetime, device=None) -> list[Event]:
     """Read today and tomorrow, including occurrences and midnight overlaps."""
     import pythoncom
     import win32com.client
@@ -58,7 +71,8 @@ def read_outlook(now: datetime) -> list[Event]:
         items = folder.Items
         items.Sort("[Start]")
         items.IncludeRecurrences = True
-        start, _, end, _ = calendar_bounds(now)
+        options = device_options(device)
+        start, _, end, _ = calendar_bounds(now, options['morning_hour'], options['morning_minute'])
         # Outlook Jet date filters expect local wall time and no seconds.
         # Double any literal apostrophes in regional separators/AM-PM designators.
         fmt = lambda t: outlook_date(t).replace("'", "''")
@@ -76,9 +90,17 @@ def read_outlook(now: datetime) -> list[Event]:
                 # StartUTC avoids ambiguity during the repeated hour when DST ends.
                 s = item.StartUTC.replace(tzinfo=timezone.utc)
                 e = item.EndUTC.replace(tzinfo=timezone.utc)
+                location = item.Location or ''
+                try: body = item.Body or ''
+                except Exception: body = '' # Optional venue evidence; unknown is allowed.
+                venue = meeting_venue(location, body)
+                location = re.sub(r'https?://\S+', '', unquote(location), flags=re.I).strip(' ;,|')
+                if venue == 1: location = 'Microsoft Teams'
                 result.append(Event(int(s.timestamp()), int(e.timestamp()),
-                                    item.Subject or "(Untitled)", item.Location or "",
-                                    int(item.BusyStatus), int(item.Sensitivity) in (2, 3)))
+                                    item.Subject or "(Untitled)", location,
+                                    int(item.BusyStatus), int(item.Sensitivity) in (2, 3),
+                                    response=int(item.ResponseStatus) if int(item.MeetingStatus) else 0,
+                                    venue=venue, all_day=bool(getattr(item, 'AllDayEvent', False))))
             item = selected.GetNext()
         return result
     finally:
@@ -95,10 +117,10 @@ async def find_display(address: str | None, timeout: float):
                                                     service_uuids=[SERVICE_UUID])
 
 
-async def authenticate(client, key: bytes) -> bytes:
+async def authenticate(client, key: bytes, timeout=15) -> bytes:
     client_nonce = secrets.token_bytes(16)
-    await client.write_gatt_char(WRITE_UUID, b'A' + client_nonce, response=True)
-    proof = bytes(await client.read_gatt_char(STATUS_UUID))
+    await asyncio.wait_for(client.write_gatt_char(WRITE_UUID, b'A' + client_nonce, response=True), timeout)
+    proof = bytes(await asyncio.wait_for(client.read_gatt_char(STATUS_UUID), timeout))
     if len(proof) != 49 or proof[:1] != b'P':
         raise RuntimeError("Display identity verification failed")
     challenge = client_nonce + proof[1:17]
@@ -107,29 +129,36 @@ async def authenticate(client, key: bytes) -> bytes:
     return challenge
 
 
-async def transfer(device, get_events, key: bytes, pair: bool, show_private: bool = False):
+async def transfer(device, get_events, key: bytes, pair: bool, show_private: bool = False,
+                   device_config=None, client_config=None, configure_only=False):
     """Authenticate before reading Outlook; timestamp only after pairing/extraction."""
     from bleak import BleakClient
-    async with BleakClient(device, pair=pair, timeout=60 if pair else 20) as client:
-        challenge = await asyncio.wait_for(authenticate(client, key), timeout=15)
+    opts = client_options(client_config)
+    hardware = device_options(device_config)
+    async with BleakClient(device, pair=pair, timeout=opts['pair_timeout_seconds'] if pair else opts['connect_timeout_seconds']) as client:
+        challenge = await asyncio.wait_for(authenticate(client, key, opts['write_timeout_seconds']), timeout=opts['auth_timeout_seconds'])
         extracted_at = datetime.now(timezone.utc)
-        events = await get_events(extracted_at)
+        events = [] if configure_only else await get_events(extracted_at)
         fresh = datetime.now(timezone.utc)
         if local_bounds(extracted_at)[:2] != local_bounds(fresh)[:2]:
             raise RuntimeError("Local date changed during extraction; retry")
-        data = payload(events, fresh, show_private)
+        data = ({'v': 4, 'kind': 'settings', 'id': secrets.token_hex(4),
+                 'now': int(fresh.timestamp()), 'morning': calendar_bounds(fresh, hardware['morning_hour'], hardware['morning_minute'])[3],
+                 'cfg': wire_options(hardware)} if configure_only else
+                payload(events, fresh, show_private, hardware))
         packet = encode(data, key, challenge)
         transaction = data['id']
         for frame in frames(packet):
-            await client.write_gatt_char(WRITE_UUID, frame, response=True)
-        deadline = asyncio.get_running_loop().time() + 10
+            await asyncio.wait_for(client.write_gatt_char(WRITE_UUID, frame, response=True), opts['write_timeout_seconds'])
+        deadline = asyncio.get_running_loop().time() + opts['ack_timeout_seconds']
         while asyncio.get_running_loop().time() < deadline:
-            status = bytes(await client.read_gatt_char(STATUS_UUID)).decode("ascii", "replace")
+            remaining = deadline - asyncio.get_running_loop().time()
+            status = bytes(await asyncio.wait_for(client.read_gatt_char(STATUS_UUID), max(0.001, remaining))).decode("ascii", "replace")
             if status == f"OK:{transaction}":
-                return len(data['events'])
+                return len(data.get('events', []))
             if status.startswith("ERR:"):
                 raise RuntimeError(f"Display rejected payload ({status})")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(min(opts['ack_poll_seconds'], max(0, deadline - asyncio.get_running_loop().time())))
         raise TimeoutError("Display did not acknowledge the schedule")
 
 
@@ -148,12 +177,17 @@ async def run(args) -> int:
         key = bytes.fromhex(config["key"])
         if len(key) != 32:
             raise ValueError("Invalid key")
+        client_cfg = client_options(config.get('client'))
+        hardware = device_options(config.get('device'))
+        if args.interval is not None: client_cfg['poll_interval_seconds'] = args.interval * 60
+        if args.scan_seconds is not None: client_cfg['scan_seconds'] = args.scan_seconds
+        client_cfg = client_options(client_cfg)
     except (OSError, ValueError, KeyError, TypeError):
         LOG.error("Missing/invalid config; run provision.py on the personal computer first")
         return 2
     # Import on the main MTA thread first; explicit STA initialization then applies
     # only to the worker, without pythoncom implicitly initializing it as MTA.
-    if not args.demo:
+    if not args.demo and not args.configure_only:
         try:
             import pythoncom
         except ImportError:
@@ -163,26 +197,31 @@ async def run(args) -> int:
     async def get_events(now):
         if args.demo:
             return demo_events(now)
-        return await asyncio.get_running_loop().run_in_executor(executor, read_outlook, now)
+        return await asyncio.get_running_loop().run_in_executor(executor, read_outlook, now, hardware)
     try:
         while True:
             try:
                 # Discover first so an absent display never launches Outlook.
-                device = await find_display(args.address or config.get("address"), args.scan_seconds)
+                device = await find_display(args.address or config.get("address"), client_cfg['scan_seconds'])
                 if device is None:
-                    if args.once:
+                    if args.once or args.configure_only:
                         return 3
                 else:
-                    count = await transfer(device, get_events, key, args.pair, args.show_private)
-                    LOG.info("Schedule accepted (%d events)", count)
-                    if args.once:
+                    count = await transfer(device, get_events, key, args.pair,
+                                           args.show_private or client_cfg['show_private'], hardware,
+                                           client_cfg, args.configure_only)
+                    if args.configure_only: LOG.info("Device settings accepted")
+                    else: LOG.info("Schedule accepted (%d events)", count)
+                    if args.once or args.configure_only:
                         return 0
             except Exception as error:
                 # Do not log COM exception strings: they may include calendar content.
                 LOG.warning("Sync unavailable (%s); will retry", type(error).__name__)
-                if args.once:
+                if args.once or args.configure_only:
                     return 1
-            await asyncio.sleep(args.interval * 60)
+                await asyncio.sleep(client_cfg['retry_interval_seconds'])
+                continue
+            await asyncio.sleep(client_cfg['poll_interval_seconds'])
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -190,17 +229,18 @@ async def run(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.local.json"))
-    parser.add_argument("--interval", type=float, default=10, help="Minutes between attempts")
-    parser.add_argument("--scan-seconds", type=float, default=15)
+    parser.add_argument("--interval", type=float, help="Override configured polling interval, in minutes")
+    parser.add_argument("--scan-seconds", type=float, help="Override configured discovery window")
     parser.add_argument("--address", help="Restrict discovery to this display's Bluetooth address")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument('--configure-only', action='store_true', help='Send device settings without reading Outlook')
     parser.add_argument("--pair", action="store_true", help="First pairing; run visibly to enter device PIN")
     parser.add_argument("--demo", action="store_true", help="Send synthetic events over real BLE")
     parser.add_argument("--dry-run", action="store_true", help="Print synthetic payload; no Outlook or BLE")
     parser.add_argument("--show-private", action="store_true", help="Reveal private appointment titles")
     parser.add_argument("--log", type=Path)
     args = parser.parse_args()
-    if not all(math.isfinite(v) and v > 0 for v in (args.interval, args.scan_seconds)):
+    if not all(math.isfinite(v) and v > 0 for v in (args.interval, args.scan_seconds) if v is not None):
         parser.error("Intervals must be positive")
     handler = (RotatingFileHandler(args.log, maxBytes=100000, backupCount=2, encoding="utf-8")
                if args.log else logging.StreamHandler())

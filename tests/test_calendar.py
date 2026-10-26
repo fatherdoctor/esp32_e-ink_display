@@ -35,7 +35,7 @@ def decrypt(packet, challenge=CHALLENGE):
 def build(events):
     with patch.object(core, 'calendar_bounds', return_value=(DAY, END, END + 86400, MORNING)), \
          patch.object(core, 'offsets', return_value=[[DAY, -18000]]):
-        return core.payload(events, NOW)
+        return core.payload(events, NOW, device={"events_per_day": 6})
 
 
 class CalendarTests(unittest.TestCase):
@@ -109,12 +109,12 @@ class CalendarTests(unittest.TestCase):
 
     def test_rejects_bad_key_and_oversized_frame(self):
         with self.assertRaises(ValueError): core.encode(build([]), b'bad', CHALLENGE)
-        with self.assertRaises(ValueError): list(core.frames(b'x' * 2049))
+        with self.assertRaises(ValueError): list(core.frames(b'x' * (core.MAX_PACKET + 1)))
 
     def test_dry_run_has_no_optional_dependency_requirement(self):
         result = subprocess.run([sys.executable, 'sync_calendar.py', '--dry-run'],
                                 check=True, capture_output=True, text=True)
-        self.assertEqual(json.loads(result.stdout)['v'], 3)
+        self.assertEqual(json.loads(result.stdout)['v'], 4)
 
     def test_day_bounds_use_independent_wall_clock_conversions(self):
         # Windows local timezone rules, including 23/25-hour dates when applicable.
@@ -136,6 +136,7 @@ class CalendarTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             script = Path(folder) / 'provision.py'
             script.write_text(Path('provision.py').read_text(), encoding='utf-8')
+            (Path(folder) / 'display_settings.py').write_text(Path('display_settings.py').read_text(), encoding='utf-8')
             subprocess.run([sys.executable, str(script)], check=True, capture_output=True)
             config = Path(folder) / 'config.local.json'
             first = config.read_bytes()
@@ -150,6 +151,7 @@ class CalendarTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             script = Path(folder) / 'provision.py'
             script.write_text(Path('provision.py').read_text(), encoding='utf-8')
+            (Path(folder) / 'display_settings.py').write_text(Path('display_settings.py').read_text(), encoding='utf-8')
             subprocess.run([sys.executable, str(script), '--target', 'seeed'],
                            check=True, capture_output=True)
             header = Path(folder) / 'firmware/seeed_trmnl/secrets.h'

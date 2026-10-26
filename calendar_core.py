@@ -9,11 +9,12 @@ import hmac
 import json
 import secrets
 import unicodedata
+from display_settings import device_options, wire_options
 
 SERVICE_UUID = "79dc1000-48c5-4b86-b403-184557b01e14"
 WRITE_UUID = "79dc1001-48c5-4b86-b403-184557b01e14"
 STATUS_UUID = "79dc1002-48c5-4b86-b403-184557b01e14"
-MAX_PACKET = 2048
+MAX_PACKET = 4096
 AUTH_DOMAIN = b"calendar-display-auth-v2"
 KEY_DOMAIN = b"calendar-display-encryption-v2"
 PAYLOAD_DOMAIN = b"calendar-display-payload-v2"
@@ -27,6 +28,9 @@ class Event:
     location: str = ""
     status: int = 2  # Outlook: 0 free, 1 tentative, 2 busy, 3 OOF, 4 elsewhere
     private: bool = False
+    response: int = 3  # Outlook: 0 appointment, 1 organizer, 2 tentative, 3 accepted, 5 unanswered
+    venue: int = 0     # 0 unspecified, 1 Teams, 2 physical, 3 hybrid
+    all_day: bool = False
 
 
 def clean(value: str, limit: int) -> str:
@@ -37,18 +41,18 @@ def clean(value: str, limit: int) -> str:
     return " ".join("".join(c if 32 <= ord(c) <= 126 else " " for c in value).split())[:limit]
 
 
-def local_bounds(now: datetime) -> tuple[int, int, int]:
+def local_bounds(now: datetime, morning_hour=7, morning_minute=0) -> tuple[int, int, int]:
     # Construct each wall-clock instant separately: tomorrow may have a new UTC offset.
     today = now.astimezone().date()
     start = datetime.combine(today, time()).astimezone()
     end = datetime.combine(today + timedelta(days=1), time()).astimezone()
-    morning = datetime.combine(today + timedelta(days=1), time(7)).astimezone()
+    morning = datetime.combine(today + timedelta(days=1), time(morning_hour, morning_minute)).astimezone()
     return int(start.timestamp()), int(end.timestamp()), int(morning.timestamp())
 
 
-def calendar_bounds(now: datetime) -> tuple[int, int, int, int]:
+def calendar_bounds(now: datetime, morning_hour=7, morning_minute=0) -> tuple[int, int, int, int]:
     """Two independent local calendar days; never assume a day is 86400 seconds."""
-    start, end, morning = local_bounds(now)
+    start, end, morning = local_bounds(now, morning_hour, morning_minute)
     date = now.astimezone().date() + timedelta(days=2)
     tomorrow_end = int(datetime.combine(date, time()).astimezone().timestamp())
     return start, end, tomorrow_end, morning
@@ -76,31 +80,44 @@ def offsets(start: int, end: int) -> list[list[int]]:
 
 
 def payload(events: list[Event], now: datetime | None = None,
-            show_private: bool = False) -> dict:
+            show_private: bool = False, device=None) -> dict:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
     epoch = int(now.timestamp())
-    start, end, tomorrow_end, morning = calendar_bounds(now)
+    options = device_options(device)
+    start, end, tomorrow_end, morning = calendar_bounds(now, options['morning_hour'], options['morning_minute'])
     remaining = sorted((e for e in events if e.end > epoch and e.start < tomorrow_end
-                        and e.end > start and e.end > e.start and e.status != 0),
+                        and e.end > start and e.end > e.start and e.response != 4
+                        and (e.status != 0 or options['include_free_events'] or
+                             (e.all_day and options['show_free_all_day_events']))),
                        key=lambda e: (e.start, e.end, e.subject))
     today = [e for e in remaining if e.start < end]
     tomorrow = [e for e in remaining if e.end > end]
-    horizon = min(end, max(epoch, today[6].start)) if len(today) > 6 else end
-    tomorrow_horizon = min(tomorrow_end, max(end, tomorrow[6].start)) if len(tomorrow) > 6 else tomorrow_end
+    limit = options['events_per_day']
+    horizon = min(end, max(epoch, today[limit].start)) if len(today) > limit else end
+    tomorrow_horizon = min(tomorrow_end, max(end, tomorrow[limit].start)) if len(tomorrow) > limit else tomorrow_end
     # An overnight event belongs to both days but is transmitted only once.
-    selected = sorted(set(today[:6] + tomorrow[:6]), key=lambda e: (e.start, e.end, e.subject))
+    selected = sorted(set(today[:limit] + tomorrow[:limit]), key=lambda e: (e.start, e.end, e.subject))
     rows = [[e.start, e.end,
              clean(e.subject, 32) if not e.private or show_private else "Private appointment",
              clean(e.location, 20) if not e.private or show_private else "",
-             3 if e.status == 3 else 2] for e in selected]
+             e.status, e.response, e.venue if not e.private or show_private else 0, int(e.all_day)] for e in selected]
     zone_start = min([start] + [e.start for e in selected])
-    return {"v": 3, "kind": "calendar", "id": secrets.token_hex(4), "now": epoch, "day": start,
+    return {"v": 4, "kind": "calendar", "id": secrets.token_hex(4), "now": epoch, "day": start,
             "end": end, "morning": morning, "until": horizon,
             "tomorrow_end": tomorrow_end, "tomorrow_until": tomorrow_horizon,
             "tz": offsets(zone_start, tomorrow_end),
-            "events": rows}
+            "cfg": wire_options(options), "events": rows}
+
+
+def blocks_availability(event: Event, device=None) -> bool:
+    options = device_options(device)
+    if event.status == 0 or event.response == 4: return False
+    if (event.status == 1 or event.response == 2) and not options['tentative_blocks_availability']: return False
+    if event.response == 5 and not options['unanswered_blocks_availability']: return False
+    if event.status == 4 and not options['working_elsewhere_blocks_availability']: return False
+    return True
 
 
 def device_proof(key: bytes, challenge: bytes) -> bytes:
@@ -120,7 +137,7 @@ def encode(data: dict, key: bytes, challenge: bytes) -> bytes:
     # Quotes/backslashes double when JSON escaped. Preserve all times and rows,
     # shortening the longest labels only if pathological text exceeds the limit.
     while len(body) + 28 > MAX_PACKET:
-        candidates = [(row, field) for row in data["events"] for field in (2, 3) if row[field]]
+        candidates = [(row, field) for row in data.get("events", []) for field in (2, 3) if row[field]]
         if not candidates:
             raise ValueError("Schedule metadata exceeds packet limit")
         row, field = max(candidates, key=lambda pair: len(pair[0][pair[1]]))

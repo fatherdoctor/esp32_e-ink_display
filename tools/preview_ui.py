@@ -47,67 +47,47 @@ EVENTS = [
 
 def calendar_page(state):
     img, d = canvas()
-    # Date/status sidebar follows the supplied physical-calendar reference.
-    d.rectangle((0, 0, 299, 91), fill='black')
-    text(d, (17, -2), '26', 72, True, 'white')
-    text(d, (112, 16), 'Monday', 23, True, 'white')
-    text(d, (113, 50), 'October 2026', 16, fill='white')
-    text(d, (22, 111), 'CURRENT AVAILABILITY', 12, True)
-    if state == 'meeting':
-        text(d, (20, 138), 'IN A', 36, True)
-        text(d, (20, 177), 'MEETING', 36, True)
-        text(d, (22, 232), 'Conference Room B', 21)
-        text(d, (22, 263), 'Project review', 16)
-        availability, detail = '11:30 AM', 'Free for 1 hr 30 min'
-    elif state == 'available':
-        text(d, (20, 144), 'AVAILABLE', 35, True)
-        text(d, (22, 205), 'You can stop by', 21)
-        text(d, (22, 246), 'Free until 1:00 PM', 18)
-        availability, detail = 'Now', 'Next meeting at 1:00 PM'
-    else:
-        text(d, (20, 138), 'OUT OF', 36, True)
-        text(d, (20, 177), 'OFFICE', 36, True)
-        text(d, (22, 236), 'Away from the desk', 20)
-        availability, detail = 'Tomorrow', 'Free at 10:00 AM'
-    rule(d, 298)
-    text(d, (22, 313), 'NEXT AVAILABLE', 12, True)
-    text(d, (20, 331), availability, 34, True)
-    text(d, (22, 380), detail, 15)
-    rule(d, 414)
-    text(d, (22, 427), 'NEXT UP', 11, True)
-    text(d, (86, 424), 'Tue 9:00  Planning' if state == 'out-of-office' else '1:00  Design workshop', 13, width=200)
-    d.line((300, 0, 300, 447), fill='black')
-    # Two separate day columns. Event fill identifies the current meeting.
-    for col, label, date in ((0, 'TODAY', 'Mon, Oct 26'), (1, 'TOMORROW', 'Tue, Oct 27')):
-        x = 342 + col * 222
-        text(d, (x + 8, 13), label, 12, True)
-        text(d, (x + 8, 32), date, 18, True)
-        if state == 'out-of-office' and col == 0:
-            text(d, (x + 8, 59), 'All day: Out of office', 10, True)
-    d.line((554, 0, 554, 447), fill='black')
-    for hour in range(8, 19):
-        y = 76 + (hour - 8) * 35
-        text(d, (310, y - 7), str(hour if hour <= 12 else hour - 12), 11)
-        d.line((337, y, 785, y), fill='black')
-    events = ([(1, 480, 540, 'Out of office', True)] + [e for e in EVENTS if e[0] == 1]
-              if state == 'out-of-office' else EVENTS)
+    text(d, (22, 15), 'Monday', 23, True)
+    text(d, (18, 40), '26', 80, True)
+    text(d, (137, 83), 'October 2026', 17)
+    busy = state != 'available'
+    status = {'meeting': 'In a meeting', 'available': 'Available', 'out-of-office': 'Out of office'}[state]
+    d.rounded_rectangle((20, 151, 285, 189), radius=19, fill='black' if busy else 'white', outline='black')
+    text(d, (35, 157), status, 19, True, 'white' if busy else 'black')
+    location = {'meeting': 'Conference Room B', 'available': 'You can stop by', 'out-of-office': 'Away from the desk'}[state]
+    text(d, (22, 209), location, 22, True, width=265)
+    text(d, (22, 251), 'Project review · Hybrid / Teams' if state == 'meeting' else
+         'Free until 1:00 PM' if state == 'available' else 'Annual leave · All day', 15, width=265)
+    text(d, (22, 306), 'Next available', 13)
+    availability = '11:30 AM' if state == 'meeting' else 'Now' if state == 'available' else 'Tomorrow'
+    text(d, (20, 326), availability, 36, True)
+    text(d, (22, 378), 'After this meeting block' if state == 'meeting' else
+         'Next meeting at 1:00 PM' if state == 'available' else 'At 10:00 AM', 15)
+    text(d, (22, 415), 'Next up', 12)
+    text(d, (22, 432), '1:00  Design workshop' if state != 'out-of-office' else 'Tue 10:00  Planning', 13)
+    for col, label, date in ((0, 'Today', 'Mon, Oct 26'), (1, 'Tomorrow', 'Tue, Oct 27')):
+        x = 344 + col * 224
+        d.rounded_rectangle((x-6, 12, x+212, 447), radius=12, outline='black')
+        text(d, (x+8, 24), label, 23, True)
+        text(d, (x+8, 56), date, 12)
+        text(d, (x+8, 77), 'All day: Annual leave' if col == 0 and state == 'out-of-office'
+             else 'Reminder: Submit expenses' if col == 0 else '', 10, width=195)
+        for hour in range(8, 19, 2):
+            y = 99 + (hour-8)*327//10
+            for xx in range(x, x+206, 5): d.point((xx,y), fill='black')
+            if col == 0: text(d, (310,y-6), str(hour%12 or 12), 11)
+    events = ([e for e in EVENTS if e[0] == 1] if state == 'out-of-office' else EVENTS)
     for day, start, end, title, active in events:
-        x = 342 + day * 222
-        y = 76 + (start - 480) * 35 // 60
-        h = max(17, (end - start) * 35 // 60)
-        fill = 'black' if active and state in ('meeting', 'out-of-office') else 'white'
-        ink = 'white' if fill == 'black' else 'black'
-        d.rectangle((x, y, x + 206, y + h - 2), fill=fill, outline='black')
-        text(d, (x + 6, y + 1), title, 10 if h < 25 else 13, True, ink, width=194)
-        if h >= 32:
-            hr, minute = divmod(start, 60)
-            ehr, em = divmod(end, 60)
-            time_label = f'{hr % 12 or 12}:{minute:02} - {ehr % 12 or 12}:{em:02}'
-            text(d, (x + 6, y + 19), time_label, 10, fill=ink)
-    d.line((0, 448, 800, 448), fill='black')
-    text(d, (18, 456), 'Synced 8:30 AM', 11)
-    text(d, (300, 456), 'KEY1  Sync', 11)
-    text(d, (594, 456), 'DEMO DATA  /  3.94 V', 11)
+        x=344+day*224; y=99+(start-480)*327//600
+        h=max(12,(end-start)*327//600-2)
+        active = active and state == 'meeting'
+        ink='white' if active else 'black'
+        d.rounded_rectangle((x,y,x+204,y+h),radius=min(6,h//2), fill='black' if active else 'white',outline='black')
+        text(d,(x+6,y+2),title,10 if h<22 else 13,True,ink,width=192)
+        if h>=28:
+            detail = 'Hybrid / Teams · Accepted' if active else 'Teams · Tentative' if title == 'Planning session' else 'In person · Accepted'
+            text(d,(x+6,y+19),detail,10,fill=ink,width=192)
+    text(d, (22, 461), 'Synced 8:30 AM     KEY1 / NFC: Sync                         DEMO DATA  /  3.94 V', 11)
     return img.convert('1', dither=Image.Dither.NONE)
 
 

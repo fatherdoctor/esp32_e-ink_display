@@ -15,7 +15,8 @@ required. The laptop uses classic Windows Outlook through local COM/MAPI.
 
 The Seeed kit is the current development target. Its calendar page uses a date
 and availability sidebar, today/tomorrow timelines, and a last-sync/battery footer.
-The Windows client and BLE wire protocol are shared by both variants.
+The current client targets Seeed schema v4. The historical Inkplate sketch
+remains on v3; use matching code from commit `2bd85e4` for that prototype.
 
 ![Calendar page design preview](previews/calendar-meeting.png)
 
@@ -28,7 +29,7 @@ Home Assistant connectivity and dashboard message ingestion are not implemented.
 
 - `sync_calendar.py` scans every 10 minutes. If the display is absent, it waits
   quietly without opening Outlook. When present, it authenticates the display,
-  then reads today and tomorrow and sends up to six current/future events per day.
+  then reads today and tomorrow and sends up to 24 current/future events per day.
 - `calendar_core.py` handles event selection, privacy redaction, UTC/local-time
   metadata, bounded AES-GCM encrypted packets, device authentication and BLE framing.
 - The display proves possession of the per-device key using fresh client and
@@ -37,14 +38,19 @@ Home Assistant connectivity and dashboard message ingestion are not implemented.
   validates the complete packet, synchronizes its clock and stores
   the schedule in RTC-retained memory. It acknowledges the exact transaction ID.
 - The radio turns off. The display wakes for meeting start/end boundaries,
-  midnight, a morning sync window, or a button press. Overlapping meetings are
+  midnight, a morning sync window, a button press, or an optional NFC field detector. Overlapping meetings are
   handled, and omitted events create a knowledge cutoff rather than false free time.
 
-**A sleeping display cannot receive BLE updates.** Press KEY1 on Seeed to open a
-manual two-minute sync window, then run the client with `--once`. The display also
-opens a 12-minute morning window for the normal polling loop. Daytime automatic
-wake windows are optional in `board_config.h` and cost battery. See the board
-instructions for timing, reset and stale-calendar behavior.
+**A sleeping display cannot receive BLE updates.** KEY1 opens a manual sync
+window (default two minutes); a configurable morning window defaults to 12 minutes.
+NFC field-detector wake, periodic BLE windows, all timers, event policies and
+calendar viewport are configured in private `config.local.json`. Settings persist
+on the Seeed and can be changed without reflashing. See the complete
+[settings and NFC guide](docs/settings.md) and [credential-free example](settings.example.json).
+
+One sync drives automatic status changes throughout the cached day and tomorrow.
+Later edits in Outlook require another sync. A plain NFC sticker cannot wake the
+panel; a wired field-detect output is required, and NFC hardware is not yet tested.
 
 ## Local software tests
 
@@ -84,7 +90,7 @@ per-run credentials and does not upload firmware artifacts.
 ## Set up the Windows laptop without administrator rights
 
 Use classic desktop Outlook with the intended profile already configured. Copy
-`sync_calendar.py`, `calendar_core.py`, `requirements.txt`, `windows/`, and your
+`sync_calendar.py`, `calendar_core.py`, `display_settings.py`, `requirements.txt`, `windows/`, and your
 private `config.local.json` into a user-writable folder using an approved transfer
 method. Firmware tools are not needed on that laptop.
 
@@ -115,9 +121,12 @@ After confirming the agenda on the display, press its sync button again and run:
 ```
 
 Private and confidential appointment titles/locations are redacted unless
-`--show-private` is explicitly supplied. Free, canceled and declined appointments
-are excluded; tentative and working-elsewhere entries conservatively count as
-busy. Recurrences and appointments spanning midnight are included. Outlook must
+`--show-private` or `client.show_private` is enabled. Canceled and declined
+appointments are excluded. Free all-day reminders are shown without marking you
+busy; other free events are optional. Tentative, unanswered and working-elsewhere
+entries conservatively block availability by default, with configurable policies.
+Accepted/tentative RSVP, Teams/physical/hybrid venues and all-day flags remain
+separate metadata. Recurrences and appointments spanning midnight are included. Outlook must
 have the relevant cached calendar data; the client does not force server sync.
 
 `--once` exit codes: 0 accepted, 1 extraction/connection/transfer failure,
@@ -155,19 +164,21 @@ framing, provisioning, mocked Outlook extraction and BLE acknowledgements. The
 and builds the Seeed firmware. Windows also exercises native regional date APIs.
 
 **Not yet verified on physical hardware:** panel compatibility/rendering,
-Windows pairing and bonded reconnect, internal clock drift, button wakes, and
+Windows pairing and bonded reconnect, internal clock drift, button/NFC wakes, and
 actual sleep current/battery life. Full refreshes are used initially. Timing is
 subject to clock drift, boot time and panel refresh; visible changes are not
 promised to be instantaneous. A power loss can leave the last image on e-paper.
 
-The two-day calendar uses semantic schema v3 inside the existing encrypted v2
-transport, with a 2,048-byte packet limit. Update the client and firmware together.
-Receivers retain support for one-day v2 data; no plaintext-v1 fallback is allowed.
+The two-day calendar uses semantic schema v4 inside the existing encrypted v2
+transport, with a 4,096-byte packet limit. Update the client and firmware together.
+The Seeed receiver also accepts v2/v3 calendar data; no plaintext-v1 fallback is allowed.
 Existing per-device keys can be reused;
 do not overwrite or publish the generated credential files.
 
 Both variants are independent of Home Assistant. Future integrations can produce
 the same [BLE protocol](PROTOCOL.md) without changing the Windows calendar reader.
+See the [Home Assistant integration plan](docs/home-assistant.md) for the native
+card/dashboard and availability integration paths.
 
 ## License
 

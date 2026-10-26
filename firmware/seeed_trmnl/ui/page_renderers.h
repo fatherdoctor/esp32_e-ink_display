@@ -34,98 +34,91 @@ void small(Canvas &c, int x, int top, const String &value, uint16_t ink = Black)
 template<class Canvas>
 void drawCalendarPage(Canvas &c, const CalendarPage &m) {
     c.fillScreen(White);
-    c.fillRect(0, 0, 300, 92, Black);
-    text(c, 16, 12, m.day, &FreeSansBold24pt7b, White, 120, 2);
-    text(c, 143, 18, m.weekday, &FreeSansBold12pt7b, White, 148);
-    text(c, 143, 56, m.monthYear, &FreeSans9pt7b, White, 148);
-    c.drawFastVLine(300, 0, 448, Black);
-    small(c, 22, 115, "CURRENT AVAILABILITY");
-    String first, second;
+    text(c, 22, 16, m.weekday, &FreeSansBold12pt7b, Black, 260);
+    text(c, 20, 48, m.day, &FreeSansBold24pt7b, Black, 115, 2);
+    text(c, 133, 78, m.monthYear, &FreeSans9pt7b, Black, 155);
+    String status;
     switch (m.status) {
-        case Availability::Available: first = "AVAILABLE"; break;
-        case Availability::Meeting: first = "IN A"; second = "MEETING"; break;
-        case Availability::OutOfOffice: first = "OUT OF"; second = "OFFICE"; break;
-        case Availability::Done: first = "DONE FOR"; second = "TODAY"; break;
-        default: first = "SYNC"; second = "NEEDED"; break;
+        case Availability::Available: status = "Available"; break;
+        case Availability::Meeting: status = "In a meeting"; break;
+        case Availability::OutOfOffice: status = "Out of office"; break;
+        case Availability::Done: status = "Available / done today"; break;
+        default: status = "Sync needed"; break;
     }
-    text(c, 21, 146, first, &FreeSansBold24pt7b, Black, 268);
-    if (second.length()) text(c, 21, 190, second, &FreeSansBold24pt7b, Black, 268);
-    text(c, 22, 241, m.location, &FreeSans9pt7b, Black, 264);
-    text(c, 22, 272, m.subject, &FreeSans9pt7b, Black, 264);
-    c.drawFastHLine(20, 300, 260, Black);
-    small(c, 22, 316, "NEXT AVAILABLE");
-    text(c, 21, 339, m.nextAvailable, &FreeSansBold24pt7b, Black, 268);
-    text(c, 22, 386, m.availabilityDetail, &FreeSans9pt7b, Black, 265);
-    c.drawFastHLine(20, 414, 260, Black);
-    small(c, 22, 430, "NEXT UP");
-    // Built-in font gives a guaranteed 31-character line at this width.
-    small(c, 84, 430, m.nextUp.substring(0, 34));
-    c.drawFastVLine(554, 0, 448, Black);
-    constexpr int top = 80, bottom = 430, firstMinute = 480, lastMinute = 1080;
-    for (int hour = 8; hour <= 18; ++hour) {
-        int y = top + (hour - 8) * 35;
-        small(c, 311, y - 3, String(hour > 12 ? hour - 12 : hour));
-        c.drawFastHLine(337, y, 449, Black);
-    }
+    bool busy = m.status == Availability::Meeting || m.status == Availability::OutOfOffice;
+    if (m.statusLabel.length()) status = m.statusLabel;
+    c.fillRoundRect(20, 151, 265, 38, 18, busy ? Black : White);
+    c.drawRoundRect(20, 151, 265, 38, 18, Black);
+    text(c, 34, 162, status, &FreeSansBold9pt7b, busy ? White : Black, 236);
+    text(c, 22, 214, m.location, &FreeSansBold12pt7b, Black, 264);
+    text(c, 22, 251, m.subject, &FreeSans9pt7b, Black, 264);
+    small(c, 23, 309, "Next available");
+    text(c, 21, 331, m.nextAvailable, &FreeSansBold24pt7b, Black, 265);
+    text(c, 22, 378, m.availabilityDetail, &FreeSans9pt7b, Black, 265);
+    small(c, 22, 419, "Next up");
+    small(c, 22, 436, m.nextUp.substring(0, 44));
+    const int top = 99, bottom = 426, span = bottom - top;
+    const int firstMinute = m.startHour * 60, lastMinute = m.endHour * 60;
+    const int minutes = lastMinute - firstMinute;
     for (int col = 0; col < 2; ++col) {
         const DayColumn &d = m.columns[col];
-        int left = 342 + col * 222;
-        small(c, left + 6, 18, d.label);
-        text(c, left + 6, 37, d.date, &FreeSansBold9pt7b, Black, 202);
-        if (d.allDay.length()) small(c, left + 6, 61, d.allDay.substring(0, 31));
-        // Hatch unknown time, so blank space cannot imply a known free schedule.
+        int left = 344 + col * 224;
+        c.drawRoundRect(left - 6, 12, 218, 435, 12, Black);
+        text(c, left + 7, 28, d.label, &FreeSansBold12pt7b, Black, 192);
+        small(c, left + 8, 58, d.date);
+        small(c, left + 8, 78, d.allDay.substring(0, 31));
+        for (int hour = m.startHour; hour <= m.endHour; hour += 2) {
+            int y = top + (hour * 60 - firstMinute) * span / minutes;
+            for (int x = left + 1; x < left + 205; x += 5) c.drawPixel(x, y, Black);
+            if (col == 0) small(c, 311, y - 3, String(m.clock24 ? hour : (hour % 12 ? hour % 12 : 12)));
+        }
         int knownMinute = d.covered ? d.coverageMinute : firstMinute;
-        int unknownY = constrain(top + (knownMinute - firstMinute) * 350 / 600, top, bottom);
+        int unknownY = constrain(top + (knownMinute - firstMinute) * span / minutes, top, bottom);
         for (int y = unknownY; y < bottom; y += 8)
             for (int x = left; x < left + 206; x += 8) c.drawPixel(x, y, Black);
         if (!d.covered) {
-            c.fillRect(left + 12, 222, 180, 24, White);
-            text(c, left + 22, 226, "Sync needed", &FreeSans9pt7b);
+            c.fillRoundRect(left + 10, 230, 185, 28, 8, White);
+            text(c, left + 23, 236, "Sync needed", &FreeSans9pt7b);
             continue;
         }
-        // Partition each connected overlap group into lanes. Never paint one
-        // event over another, including chains of partially overlapping events.
         int i = 0, outside = 0;
         while (i < d.count) {
             int groupEnd = d.events[i].endMinute, end = i + 1;
             while (end < d.count && d.events[end].startMinute < groupEnd) {
                 groupEnd = max(groupEnd, d.events[end].endMinute); ++end;
             }
-            int laneEnds[12] = {}, lanes[12] = {}, laneCount = 0;
+            int laneEnds[48] = {}, lanes[48] = {}, laneCount = 0;
             for (int j = i; j < end; ++j) {
                 int lane = 0;
                 while (lane < laneCount && laneEnds[lane] > d.events[j].startMinute) ++lane;
                 if (lane == laneCount) ++laneCount;
-                lanes[j - i] = lane; laneEnds[lane] = d.events[j].endMinute;
+                lanes[j-i] = lane; laneEnds[lane] = d.events[j].endMinute;
             }
             for (int j = i; j < end; ++j) {
                 const TimelineEvent &e = d.events[j];
                 if (e.startMinute < firstMinute || e.endMinute > lastMinute) ++outside;
                 int a = max(firstMinute, e.startMinute), b = min(lastMinute, e.endMinute);
                 if (a >= b) continue;
-                int width = 206 / laneCount, x = left + lanes[j - i] * width;
-                int y = top + (a - firstMinute) * 350 / 600;
-                int h = max(3, (b - a) * 350 / 600 - 1);
+                int width = 206 / laneCount, x = left + lanes[j-i] * width;
+                int y = top + (a-firstMinute) * span / minutes;
+                int h = max(3, (b-a) * span / minutes - 2);
                 uint16_t ink = e.active ? White : Black;
-                c.fillRect(x, y, width - 2, h, e.active ? Black : White);
-                c.drawRect(x, y, width - 2, h, Black);
-                if (h >= 20) text(c, x + 5, y + 3, e.title, &FreeSansBold9pt7b, ink, width - 13);
-                else if (h >= 11) small(c, x + 3, y + 2, e.title.substring(0, max(1, (width - 9) / 6)), ink);
-                if (h >= 35) {
-                    char time[20];
-                    snprintf(time, sizeof(time), "%d:%02d - %d:%02d", e.startMinute / 60 % 12 ? e.startMinute / 60 % 12 : 12,
-                        e.startMinute % 60, e.endMinute / 60 % 12 ? e.endMinute / 60 % 12 : 12, e.endMinute % 60);
-                    small(c, x + 5, y + 24, String(time).substring(0, max(1, (width - 12) / 6)), ink);
-                }
+                int radius = min(6, min(h/2, (width-2)/2));
+                c.fillRoundRect(x, y, width-2, h, radius, e.active ? Black : White);
+                c.drawRoundRect(x, y, width-2, h, radius, Black);
+                if (e.tentative) for (int yy=y+3; yy<y+h-2; yy+=4) c.drawFastVLine(x+2, yy, 2, ink);
+                if (h >= 21) text(c, x+6, y+4, e.title, &FreeSansBold9pt7b, ink, width-15);
+                else if (h >= 11) small(c, x+3, y+2, e.title.substring(0, max(1,(width-9)/6)), ink);
+                if (h >= 32) small(c, x+6, y+22, e.detail.substring(0, max(1,(width-15)/6)), ink);
             }
             i = end;
         }
-        if (outside) small(c, left + 3, 437, String(outside) + " outside 8 AM - 6 PM");
+        if (outside) small(c, left+6, 434, String(outside) + " outside visible hours");
     }
-    c.drawFastHLine(0, 448, 800, Black);
-    small(c, 18, 460, m.footer.substring(0, 125));
+    small(c, 22, 465, m.footer.substring(0, 125));
     c.setFont(nullptr);
 }
+
 template<class Canvas>
 void drawDashboardPage(Canvas &c, const DashboardPage &m) {
     c.fillScreen(White);

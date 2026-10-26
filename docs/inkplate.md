@@ -1,7 +1,9 @@
+> Historical prototype: this sketch uses schema v3. Use the matching client from
+> commit `2bd85e4`. Current schema v4 runtime settings/NFC work targets Seeed.
+
 # Inkplate Calendar
 
-A standalone Outlook calendar sign for an Inkplate 6COLOR. All project files live
-under `C:\dev\InkplateCalendar`. The Home Assistant repository is read-only and is
+A standalone Outlook calendar sign for an Inkplate 6COLOR. The source lives in this repository. The Home Assistant repository is read-only and is
 not a dependency. No Home Assistant connection, cloud API, Graph token, or Azure
 registration is used.
 
@@ -81,7 +83,7 @@ A deep-sleeping ESP32 cannot advertise or receive BLE. This is a physical limit.
 In PowerShell, using the installed Python launcher:
 
 ```powershell
-Set-Location C:\dev\InkplateCalendar
+# Run from the matching historical checkout directory.
 py -3 -m pip install -r requirements-test.txt
 py -3 -m unittest discover -s tests -v
 py -3 .\sync_calendar.py --dry-run
