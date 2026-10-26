@@ -11,26 +11,35 @@ here independently of the data source, BLE transport, panel refresh and sleep.
 | Main sketch | Validate incoming data, choose a page, measure battery, refresh and sleep |
 | Windows client | Read Outlook and send semantic data, with no knowledge of UI coordinates |
 
-The calendar page uses a large date/status sidebar and two day-agenda columns.
-The status block is 120 pixels tall with up to two lines of 24pt bold text.
-Location and subject wrap independently below it, followed by next availability.
-The old Next up row and extra availability caption were removed to make room.
+The calendar page uses a large date/status sidebar and one wide Today timeline.
+The day header is 52 pixels tall. The sidebar retains the 120-pixel status block,
+wrapped location/subject and next availability. The cache still holds today and
+tomorrow: tomorrow becomes the visible Today after midnight without another sync.
 
-Each day shows up to three ongoing/upcoming meetings in 94-pixel cards, with an
-explicit time range, up to two title lines, and a separate RSVP/venue line.
-Cards are chronological rather than proportional to duration, so short meetings
-have the same readable height as long ones. Overlapping meetings keep their own
-cards and real time labels. Finished entries are counted as earlier, and extra
-upcoming entries are counted as more. Omitted cards stay in the cache and still
-participate in availability calculations. All-day reminders have a two-line
-header area; incomplete coverage is explicitly labeled as a partial schedule.
+Ongoing/upcoming meetings use explicit time ranges and offset, physically
+overlapping blocks for concurrent events. A shared geometry helper protects each
+34-pixel title/time row from later layers; inset depth is capped to retain usable
+text width. A white separation edge keeps overlapping black blocks distinct.
+Minimum readable heights and protected headings can expand visual duration;
+printed times are authoritative. Nonconcurrent meetings never visually overlap.
+When a complete heading cannot fit, the event is counted as more instead of
+clipped. Finished and out-of-range entries are also counted. All cached events
+continue to participate in availability calculations regardless of visibility.
 
-The existing timeline_start_hour/end_hour settings now filter the agenda's hours
-(default 8 AM to 6 PM). Events crossing the range remain visible with their real
-times; entries wholly outside it are counted below. Word wrapping uses measured
-font bounds, with an explicit ellipsis for text exceeding its allotted lines.
+The timeline_start_hour/end_hour settings select the displayed hours (default
+8 AM to 6 PM). The preview fixture uses 10 AM to 5 PM. The wide card's title/time
+row replaces the old RSVP/venue detail row to fit more meetings. Tentative and
+unanswered entries use a 25% ordered-dither accent; day/dashboard headers use
+12.5%. Text stays on solid backgrounds, with padding to the patterned areas.
+Incomplete coverage is labeled and stippled; all-day reminders use the notice
+row when coverage is complete. Long text uses an explicit ellipsis.
+
+The native timeline helper has C++ regression tests for approved overlaps,
+adjacent short events, dense conflicts, clipping and 1,000 randomized schedules.
+The Python test runner compiles/runs those tests where g++ is available (Linux CI).
 
 The six-card dashboard renderer is compiled and ready for a future data adapter.
+Its page title and card headings are centered with stippled header accents.
 It is read-only: the current firmware does not accept HA dashboard messages,
 connect to Home Assistant, run a browser, or operate HA controls. It provides
 the rendering seam for that work. A native dashboard data schema would be a

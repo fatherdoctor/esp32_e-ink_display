@@ -95,14 +95,19 @@ unknown. Bodies and join URLs are never transmitted. Privacy redaction hides
 titles, locations and venue unless `client.show_private` or `--show-private` is set.
 
 `timeline_start_hour`, `timeline_end_hour` and `use_24_hour_time` control the
-agenda's included hours and clock labels. The option names are retained for
-compatibility. Each day shows the first three ongoing/upcoming meetings in tall,
-chronological cards with explicit times. Finished events, further upcoming
-meetings and entries outside the selected hours have count labels. All cached
-meetings still affect availability, including cards that do not fit on screen.
-Location and subject text wrap, and overlong text uses a visible ellipsis rather
-than crossing a border. Next up and the extra availability caption were removed
-to prioritize a large status block, location and next-available time.
+Today timeline's hours and clock labels. Only today is drawn; tomorrow remains
+cached for rollover and next-availability calculations. Concurrent entries use
+offset, overlapping blocks with protected title/time headings. Short events may
+have expanded visual heights to remain readable, so printed times are authoritative.
+The number visible depends on density, duration and overlaps; entries that cannot
+fit a complete heading are counted as more. Finished and out-of-range entries
+also have count labels. All cached meetings still affect availability.
+
+The sidebar keeps its large status block and wrapped location/subject. The
+compact day header and wider timeline replace the two-column agenda. Card
+RSVP/venue detail rows, Next up and the extra availability caption are omitted.
+Tentative/unanswered entries have stippled accents; unknown coverage is explicitly
+labeled and stippled. Titles exceeding their measured width have an ellipsis.
 
 Meetings whose local end label precedes their start during a repeated DST hour
 appear as a `Clock change` entry in the day header; UTC-based availability remains

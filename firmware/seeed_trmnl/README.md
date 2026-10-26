@@ -9,7 +9,7 @@ Wi-Fi. It is not the older XIAO ESP32-C3 panel or the retail TRMNL OG.
 Compiled successfully on Windows on 2026-10-26 with PlatformIO 6.1.18,
 espressif32 6.12.0, Arduino-ESP32 2.0.17, GxEPD2 1.6.5, Adafruit GFX 1.12.1,
 Adafruit BusIO 1.17.2, and ArduinoJson 6.21.5. The latest local configurable two-day UI build uses
-about 105 KB of static RAM and 989 KB of flash. Hardware behavior is not yet validated.
+about 105 KB of static RAM and 991 KB of flash. Hardware behavior is not yet validated.
 
 The PlatformIO XIAO S3 profile is overridden for the PLUS's 16 MB flash and 8 MB
 OPI PSRAM. Its opening summary still names the base 8 MB board; the generated
@@ -65,9 +65,10 @@ multimeter if necessary; voltage is not treated as a charge percentage.
 ## Behavior
 
 - A date header and large availability/location details occupy the left sidebar.
-- The right side shows today and tomorrow as tall agenda cards, with three upcoming
-  entries per day, explicit times and counts for additional/finished entries.
-  Current meetings use solid black cards; partial schedules are labeled.
+- The right side shows a wide Today-only timeline with a compact header.
+  Concurrent meetings physically overlap with protected title/time rows;
+  overflow, finished and out-of-range entries have counts. The cache retains
+  tomorrow for rollover. Partial schedules are labeled and stippled.
 - Each day carries up to 24 entries and its own knowledge cutoff. At midnight,
   cached tomorrow becomes today. The next, uncached day is marked unknown.
 - Page models/renderers are separate modules; a dashboard-card renderer is also

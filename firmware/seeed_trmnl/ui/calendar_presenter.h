@@ -26,10 +26,11 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
     } else { m.day = "--"; m.weekday = "Calendar"; m.monthYear = "Sync to set date"; }
     uint32_t todayEnd = calendarDayEnd(now), nextStart = todayEnd;
     uint32_t busyEnd = now;
-    int active = -1, next = -1;
+    int active = -1, next = -1, activeCount = 0;
     for (int i = 0; i < calendar.count; ++i) {
         const Event &e = calendar.events[i];
         if (blocksAvailability(e) && e.start <= now && e.end > now) {
+            ++activeCount;
             if (active < 0 || e.status == 3) active = i;
             busyEnd = max(busyEnd, e.end);
         }
@@ -56,6 +57,20 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
         if (e.venue == 1) m.location = "Microsoft Teams";
         if (e.venue == 3) m.location += " / Teams";
         m.subject = e.subject;
+        if (activeCount > 1) {
+            m.subject = String(activeCount) + " overlapping meetings";
+            bool online = false, physical = false;
+            String room;
+            for (int i = 0; i < calendar.count; ++i) {
+                const Event &other = calendar.events[i];
+                if (!blocksAvailability(other) || other.start > now || other.end <= now) continue;
+                online |= other.venue == 1 || other.venue == 3;
+                physical |= other.venue == 2 || other.venue == 3;
+                if ((other.venue == 2 || other.venue == 3) && strlen(other.location)) room = other.location;
+            }
+            if (online && physical) m.location = room.length() ? room : "In person";
+            if (online && physical && m.location.indexOf("Teams") < 0) m.location += " + Teams";
+        }
         uint32_t horizon = knowledgeUntil(now);
         if (now < calendar.end && calendar.until == calendar.end) horizon = calendar.tomorrowUntil;
         m.nextAvailable = busyEnd < horizon ? (busyEnd >= todayEnd ? "Tomorrow" : hhmm(busyEnd)) : "Unknown";
@@ -72,17 +87,16 @@ inline CalendarPage presentCalendar(uint32_t now, float voltage) {
         const Event &e = calendar.events[next];
         m.nextUp = (e.start >= todayEnd ? dateText(e.start, "%a ") : "") + hhmm(e.start) + " " + e.subject;
     } else m.nextUp = known ? "No later meetings" : "Sync needed";
-    for (int col = 0; col < 2; ++col) {
-        DayColumn &d = m.columns[col];
-        uint32_t from = col == 0 ? (now < calendar.end ? calendar.day : calendar.end) : todayEnd;
-        uint32_t to = col == 0 ? todayEnd : calendar.tomorrowEnd;
-        d.label = col == 0 ? "Today" : "Tomorrow";
-        d.covered = valid && (col == 0 || now < calendar.end) && to > from;
+    {
+        DayColumn &d = m.today;
+        uint32_t from = now < calendar.end ? calendar.day : calendar.end;
+        uint32_t to = todayEnd;
+        d.label = "Today";
+        d.covered = valid && to > from;
         d.date = d.covered || valid ? dateText(from, "%a, %b %d") : "Awaiting sync";
-        uint32_t horizon = col == 0 ? knowledgeUntil(now) : calendar.tomorrowUntil;
+        uint32_t horizon = knowledgeUntil(now);
         d.coverageMinute = horizon >= to ? 1440 : minuteOfDay(horizon);
-        if (!d.covered) continue;
-        for (int i = 0; i < calendar.count; ++i) {
+        for (int i = 0; d.covered && i < calendar.count; ++i) {
             const Event &e = calendar.events[i];
             if (e.end <= from || e.start >= to) continue;
             if (e.allDay || (e.start <= from && e.end >= to)) {

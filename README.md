@@ -14,7 +14,7 @@ required. The laptop uses classic Windows Outlook through local COM/MAPI.
 | Inkplate 6COLOR, 600x448 color | [Inkplate guide](docs/inkplate.md) | Initial source; not compiled or hardware-tested |
 
 The Seeed kit is the current development target. Its calendar page uses a date
-and availability sidebar, today/tomorrow agenda cards, and a last-sync/battery footer.
+and availability sidebar, a Today-only timeline with offset overlapping meetings, and a last-sync/battery footer.
 The current client targets Seeed schema v4. The historical Inkplate sketch
 remains on v3; use matching code from commit `2bd85e4` for that prototype.
 

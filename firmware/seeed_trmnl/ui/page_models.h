@@ -23,7 +23,7 @@ struct CalendarPage {
     Availability status = Availability::Unknown;
     String day, weekday, monthYear, subject, location, statusLabel;
     String nextAvailable, availabilityDetail, nextUp, footer;
-    DayColumn columns[2];
+    DayColumn today;
     int startHour = 8, endHour = 18;
     bool clock24 = false;
 };
