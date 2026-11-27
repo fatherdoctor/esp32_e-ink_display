@@ -180,6 +180,10 @@ the same [BLE protocol](PROTOCOL.md) without changing the Windows calendar reade
 See the [Home Assistant integration plan](docs/home-assistant.md) for the native
 card/dashboard and availability integration paths.
 
+## Contributing
+
+Start with an issue, then work on a branch and open a pull request into `main` that says `Closes #n`; `CONTRIBUTING.md` has the steps.
+
 ## License
 
 Project source is under the repository's [MIT license](LICENSE). Third-party
